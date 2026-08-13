@@ -15,6 +15,7 @@ import type {
   Caneta,
   DiaSemana,
   Efeito,
+  MensagemCopiloto,
   Medicamento,
   Medida,
   Perfil,
@@ -27,6 +28,7 @@ import type {
   RegistroRefeicao,
   RegistroSintoma,
   SementeCatalogo,
+  SessaoChat,
 } from '@/domain/tipos';
 
 /**
@@ -268,6 +270,32 @@ export const conversorPlanoAlimentar = converter<PlanoAlimentar>(
   }),
 ) as FirestoreDataConverter<PlanoAlimentar, DocumentData>;
 
+export const conversorMensagemCopiloto = converter<MensagemCopiloto>(
+  (d) => ({
+    role: d.role === 'assistant' ? 'assistant' : 'user',
+    text: String(d.text ?? ''),
+    createdAt: paraData(d.createdAt) ?? new Date(),
+  }),
+  (m) => ({
+    role: m.role,
+    text: m.text,
+    createdAt: paraTimestamp(m.createdAt),
+  }),
+) as FirestoreDataConverter<MensagemCopiloto, DocumentData>;
+
+export const conversorSessaoChat = converter<SessaoChat>(
+  (d) => ({
+    titulo: String(d.titulo ?? ''),
+    createdAt: paraData(d.createdAt) ?? new Date(),
+    updatedAt: paraData(d.updatedAt) ?? new Date(),
+  }),
+  (s) => ({
+    titulo: s.titulo,
+    createdAt: paraTimestamp(s.createdAt),
+    updatedAt: paraTimestamp(s.updatedAt),
+  }),
+) as FirestoreDataConverter<SessaoChat, DocumentData>;
+
 export const conversorEfeito = converter<Efeito>(
   (d) => ({
     data: paraData(d.data) ?? new Date(),
@@ -443,3 +471,9 @@ export const colFotosProgresso = (uid: string): CollectionReference<RegistroFoto
 
 export const colRefeicoes = (uid: string): CollectionReference<RegistroRefeicao> =>
   collection(docUsuario(uid), 'meals').withConverter(conversorRegistroRefeicao);
+
+export const colSessoesChat = (uid: string): CollectionReference<SessaoChat> =>
+  collection(docUsuario(uid), 'sessoes_chat').withConverter(conversorSessaoChat);
+
+export const colMensagensSessao = (uid: string, sessaoId: string): CollectionReference<MensagemCopiloto> =>
+  collection(doc(colSessoesChat(uid), sessaoId), 'mensagens').withConverter(conversorMensagemCopiloto);

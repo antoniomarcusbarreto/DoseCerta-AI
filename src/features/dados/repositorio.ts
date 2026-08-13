@@ -22,9 +22,11 @@ import {
   colHidratacao,
   colHistoricoPeso,
   colMedicamentos,
+  colMensagensSessao,
   colPlanosAlimentares,
   colProtocolos,
   colRefeicoes,
+  colSessoesChat,
   colSintomas,
   refAgenda,
   refPerfil,
@@ -467,6 +469,31 @@ export async function excluirRefeicao(
   await deleteDoc(doc(colRefeicoes(uid), refeicao.id));
 }
 
+const PAGINA_EXCLUSAO_MENSAGENS = 450;
+
+/**
+ * Apaga uma sessão de chat inteira: a subcoleção `mensagens` não some junto
+ * com o doc da sessão (Firestore não faz cascade delete), então é preciso
+ * esvaziá-la em páginas antes — sem limite de tamanho de conversa, a
+ * paginação repete até a coleção esvaziar.
+ */
+export async function excluirSessaoChat(uid: string, sessaoId: string): Promise<void> {
+  const colMensagens = colMensagensSessao(uid, sessaoId);
+
+  for (;;) {
+    const pagina = await getDocs(query(colMensagens, limit(PAGINA_EXCLUSAO_MENSAGENS)));
+    if (pagina.empty) break;
+
+    const lote = writeBatch(getDb());
+    pagina.docs.forEach((snap) => lote.delete(snap.ref));
+    await lote.commit();
+
+    if (pagina.size < PAGINA_EXCLUSAO_MENSAGENS) break;
+  }
+
+  await deleteDoc(doc(colSessoesChat(uid), sessaoId));
+}
+
 /* ---- Consultas prontas -------------------------------------------------- */
 
 /**
@@ -557,3 +584,9 @@ export const consultaIntestinoRecentes = (uid: string, maximo = 10) =>
  * por byte e jogaria "Ávita" para depois de "Zempneo". De quebra, evita índice.
  */
 export const consultaMedicamentos = (uid: string) => query(colMedicamentos(uid));
+
+export const consultaSessoesChat = (uid: string) =>
+  query(colSessoesChat(uid), orderBy('updatedAt', 'desc'));
+
+export const consultaMensagensSessao = (uid: string, sessaoId: string, maximo = 200) =>
+  query(colMensagensSessao(uid, sessaoId), orderBy('createdAt', 'asc'), limit(maximo));

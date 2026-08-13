@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { BarraAbas } from './BarraAbas';
+import { BotaoSuporteFlutuante } from './BotaoSuporteFlutuante';
 import { NavLateral } from './NavLateral';
 
 type CascaProps = {
@@ -33,6 +34,7 @@ export function Casca({ comNavegacao = true, children }: CascaProps) {
         <div className="casca-app min-h-dvh">{children}</div>
       </div>
 
+      {comNavegacao ? <BotaoSuporteFlutuante /> : null}
       {comNavegacao ? <BarraAbas /> : null}
     </div>
   );

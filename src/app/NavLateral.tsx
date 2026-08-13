@@ -1,6 +1,20 @@
-import { NavLink } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 import { useTheme } from '@/features/theme/ThemeProvider';
 import { ABAS } from './abas';
+
+const IconeSuporte = () => (
+  <svg viewBox="0 0 24 24" className="size-6" aria-hidden="true">
+    <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+    <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
+    <path
+      d="M6.5 6.5l3 3M17.5 6.5l-3 3M6.5 17.5l3-3M17.5 17.5l-3-3"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+    />
+  </svg>
+);
 
 /**
  * Navegação do desktop: coluna fixa à esquerda, sempre visível.
@@ -24,6 +38,8 @@ export function NavLateral() {
     }
     return isActive ? 'bg-white/10 text-white' : 'text-slate-400';
   };
+
+  const corSuporte = theme === 'oceano-escuro' ? 'text-slate-400' : 'text-slate-600';
 
   return (
     <nav
@@ -61,6 +77,22 @@ export function NavLateral() {
           </li>
         ))}
       </ul>
+
+      {/* Empurrado para o rodapé pelo mt-auto: suporte é uma saída, não um
+          destino de uso diário, então fica separado da navegação principal.
+          O Co-piloto já vem pela lista de ABAS acima — é uso diário, não uma
+          saída — então não se repete aqui. */}
+      <div className="mt-auto border-t pt-3" style={{ borderColor: 'var(--border-hair)' }}>
+        <Link
+          to="/ajustes/suporte"
+          className={`flex min-h-11 items-center gap-3 rounded-[var(--r-field)] px-3 transition-colors hover:bg-sunken ${corSuporte}`}
+        >
+          <span aria-hidden="true" style={{ opacity: 0.75 }}>
+            <IconeSuporte />
+          </span>
+          <span className="t-label">Suporte e Feedback</span>
+        </Link>
+      </div>
     </nav>
   );
 }

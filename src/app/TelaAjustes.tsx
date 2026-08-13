@@ -61,6 +61,11 @@ export function TelaAjustes() {
           : 'Catálogo de canetas, doses e validade',
     },
     {
+      para: '/ajustes/suporte',
+      titulo: 'Suporte e Feedback',
+      descricao: 'Dúvidas, bugs ou sugestões',
+    },
+    {
       titulo: 'Canetas',
       descricao: 'Estoque, lote e validade após a abertura',
       emBreve: true,

@@ -247,3 +247,21 @@ export type PlanoAlimentar = {
   meals: Refeicao[];
   createdAt: Date;
 };
+
+export type PapelMensagemCopiloto = 'user' | 'assistant';
+
+/** Uma mensagem de uma sessão de chat com o Co-piloto de Hábitos (IA). */
+export type MensagemCopiloto = {
+  id: string;
+  role: PapelMensagemCopiloto;
+  text: string;
+  createdAt: Date;
+};
+
+/** Uma sessão de chat do Co-piloto — as mensagens ficam na subcoleção `mensagens`. */
+export type SessaoChat = {
+  id: string;
+  titulo: string;
+  createdAt: Date;
+  updatedAt: Date;
+};

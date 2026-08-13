@@ -21,6 +21,8 @@ import { TelaIntestino } from '@/features/evolucao/TelaIntestino';
 import { TelaPesosMedidas } from '@/features/evolucao/TelaPesosMedidas';
 import { TelaScanner } from '@/features/evolucao/TelaScanner';
 import { TelaSintomas } from '@/features/evolucao/TelaSintomas';
+import { TelaSuporte } from '@/features/suporte/TelaSuporte';
+import { TelaCopiloto } from '@/features/copiloto/TelaCopiloto';
 
 export function App() {
   return (
@@ -33,6 +35,19 @@ export function App() {
 
             {/* Vitrine do design system: aberta, sem depender de sessão. */}
             <Route path="/kitchen-sink" element={<KitchenSink />} />
+
+            {/* Tela cheia própria, fora da Casca/NavLateral/BarraAbas: um input
+                fixo no rodapé mais teclado virtual brigaria com a barra de
+                abas fixa se ficasse dentro do Layout padrão. Só precisa de
+                AuthGate — não consome dados de DadosProvider. */}
+            <Route
+              path="/copiloto"
+              element={
+                <AuthGate>
+                  <TelaCopiloto />
+                </AuthGate>
+              }
+            />
 
             {/* Área autenticada. O DadosProvider fica acima do Layout para que
                 todas as abas leiam da mesma assinatura do Firestore. */}
@@ -59,6 +74,7 @@ export function App() {
               <Route path="/ajustes" element={<TelaAjustes />} />
               <Route path="/ajustes/tratamento" element={<TelaTratamento />} />
               <Route path="/ajustes/medicamentos" element={<TelaMedicamentos />} />
+              <Route path="/ajustes/suporte" element={<TelaSuporte />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

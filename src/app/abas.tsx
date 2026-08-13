@@ -19,9 +19,10 @@ const traco = {
  * barra inferior no celular (BarraAbas) e menu lateral no desktop
  * (NavLateral). Ficam aqui para que as duas nunca divirjam.
  *
- * Quatro itens de propósito: a navegação não cresce quando surgirem
- * funcionalidades novas — elas entram na lista de Ajustes. Cinco rótulos já
- * ficam apertados em tela estreita, e o alvo de toque encolhe junto.
+ * Cinco itens de propósito: o Co-piloto ganhou destaque aqui porque é uso
+ * diário, não uma seção de configuração — o resto das funcionalidades novas
+ * continua entrando na lista de Ajustes. `flex-1` em cada botão (BarraAbas)
+ * absorve o item a mais; o alvo de toque só encolhe um pouco.
  */
 export const ABAS: Aba[] = [
   {
@@ -49,6 +50,19 @@ export const ABAS: Aba[] = [
     icone: (
       <svg viewBox="0 0 24 24" className="size-6" aria-hidden="true">
         <path d="M4 17l5-5 3.5 3.5L20 8M20 8h-4.5M20 8v4.5" {...traco} />
+      </svg>
+    ),
+  },
+  {
+    para: '/copiloto',
+    rotulo: 'Co-piloto',
+    icone: (
+      <svg viewBox="0 0 24 24" className="size-6" aria-hidden="true">
+        <path
+          d="M12 3.5l1.4 4.2 4.2 1.4-4.2 1.4-1.4 4.2-1.4-4.2-4.2-1.4 4.2-1.4L12 3.5zM19 14l.8 2.3 2.3.8-2.3.8-.8 2.3-.8-2.3-2.3-.8 2.3-.8.8-2.3z"
+          {...traco}
+          strokeLinejoin="round"
+        />
       </svg>
     ),
   },
