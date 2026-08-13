@@ -1,0 +1,559 @@
+import {
+  addDoc,
+  deleteDoc,
+  doc,
+  getDocs,
+  increment,
+  limit,
+  orderBy,
+  query,
+  setDoc,
+  updateDoc,
+  where,
+  writeBatch,
+} from 'firebase/firestore';
+import { deleteObject, getDownloadURL, ref as refStorage, uploadBytes } from 'firebase/storage';
+import { getDb, getStorageCliente } from '@/lib/firebase';
+import {
+  colAplicacoes,
+  colBowelLogs,
+  colCanetas,
+  colFotosProgresso,
+  colHidratacao,
+  colHistoricoPeso,
+  colMedicamentos,
+  colPlanosAlimentares,
+  colProtocolos,
+  colRefeicoes,
+  colSintomas,
+  refAgenda,
+  refPerfil,
+  refSementeCatalogo,
+  refUsuario,
+} from '@/lib/firestore';
+import { proximaAplicacao } from '@/domain/aplicacao';
+import { CATALOGO_VERSAO, entradasPendentes, paraMedicamento } from '@/domain/catalogo';
+import { macrosProporcionais } from '@/domain/refeicao';
+import type {
+  AnguloFoto,
+  Aplicacao,
+  MacrosRefeicao,
+  Medicamento,
+  Perfil,
+  PlanoAlimentar,
+  Protocolo,
+  RegistroFoto,
+  RegistroHidratacao,
+  RegistroIntestino,
+  RegistroPeso,
+  RegistroRefeicao,
+  RegistroSintoma,
+} from '@/domain/tipos';
+
+/**
+ * Escritas no Firestore.
+ *
+ * Regra da casa: nenhuma regra de negócio mora aqui. Este módulo orquestra
+ * `src/domain` e o Firestore; o cálculo em si é sempre da função pura.
+ */
+
+export async function garantirPerfil(uid: string, nome: string): Promise<void> {
+  const perfil: Perfil = { nome, alturaCm: null, criadoEm: new Date() };
+  // merge: chamado a cada login, não pode sobrescrever a altura já preenchida.
+  await setDoc(refPerfil(uid), perfil, { merge: true });
+}
+
+export async function atualizarPerfil(uid: string, campos: Partial<Perfil>): Promise<void> {
+  await setDoc(refPerfil(uid), campos as Perfil, { merge: true });
+}
+
+/**
+ * Recalcula e grava o doc denormalizado da agenda.
+ *
+ * Precisa rodar depois de QUALQUER mudança em protocolo ou aplicações, senão
+ * o lembrete dispara na data velha. `notificadaEm` volta a null porque a nova
+ * data ainda não foi notificada.
+ */
+export async function sincronizarAgenda(
+  uid: string,
+  protocolo: Protocolo | null,
+  aplicacoes: Aplicacao[],
+): Promise<void> {
+  if (!protocolo?.ativo) {
+    await setDoc(refAgenda(uid), { proximaEm: null, notificadaEm: null, protocoloId: null });
+    return;
+  }
+
+  await setDoc(refAgenda(uid), {
+    proximaEm: proximaAplicacao(protocolo, aplicacoes),
+    notificadaEm: null,
+    protocoloId: protocolo.id,
+  });
+}
+
+export type NovoProtocolo = Omit<Protocolo, 'id' | 'criadoEm' | 'ativo'>;
+
+/**
+ * Cria um protocolo e o torna o ativo.
+ *
+ * O modelo é de um protocolo ativo por vez: mudar de medicamento arquiva o
+ * anterior em vez de apagá-lo, para o histórico de aplicações continuar
+ * explicável depois.
+ */
+export async function criarProtocolo(
+  uid: string,
+  novo: NovoProtocolo,
+  /**
+   * Histórico já existente. Importa ao trocar de dose: sem ele, a agenda
+   * agendaria a próxima ocorrência do dia-alvo mesmo tendo havido aplicação
+   * ontem — o que marcaria uma dose fora do intervalo.
+   */
+  aplicacoesExistentes: Aplicacao[] = [],
+): Promise<string> {
+  const anteriores = await getDocs(query(colProtocolos(uid), where('ativo', '==', true)));
+
+  const lote = writeBatch(getDb());
+  anteriores.forEach((snap) => lote.update(snap.ref, { ativo: false }));
+  await lote.commit();
+
+  const criadoEm = new Date();
+  const criado = await addDoc(colProtocolos(uid), { ...novo, ativo: true, criadoEm } as Protocolo);
+
+  await sincronizarAgenda(
+    uid,
+    { ...novo, id: criado.id, ativo: true, criadoEm },
+    aplicacoesExistentes,
+  );
+
+  return criado.id;
+}
+
+export async function atualizarProtocolo(
+  uid: string,
+  protocoloId: string,
+  campos: Partial<Protocolo>,
+): Promise<void> {
+  await updateDoc(doc(colProtocolos(uid), protocoloId), campos);
+}
+
+export type NovaAplicacao = Omit<Aplicacao, 'id' | 'criadoEm'>;
+
+/**
+ * Registra uma aplicação e, no mesmo lote, dá baixa na dose da caneta.
+ *
+ * O lote é o que impede o estado inconsistente clássico: aplicação gravada
+ * mas estoque intacto (ou o contrário) se a rede cair no meio.
+ */
+export async function registrarAplicacao(
+  uid: string,
+  nova: NovaAplicacao,
+  protocolo: Protocolo,
+  aplicacoesAnteriores: Aplicacao[],
+): Promise<string> {
+  const lote = writeBatch(getDb());
+
+  const refNova = doc(colAplicacoes(uid));
+  lote.set(refNova, { ...nova, criadoEm: new Date() } as Aplicacao);
+
+  if (nova.canetaId && nova.status === 'aplicada') {
+    // `increment` resolve no servidor: duas abas registrando ao mesmo tempo
+    // não sobrescrevem a contagem uma da outra.
+    lote.update(doc(colCanetas(uid), nova.canetaId), { dosesUsadas: increment(1) });
+  }
+
+  await lote.commit();
+
+  const registrada: Aplicacao = { ...nova, id: refNova.id, criadoEm: new Date() };
+  await sincronizarAgenda(uid, protocolo, [...aplicacoesAnteriores, registrada]);
+
+  return refNova.id;
+}
+
+export async function excluirAplicacao(
+  uid: string,
+  aplicacaoId: string,
+  protocolo: Protocolo | null,
+  aplicacoesRestantes: Aplicacao[],
+): Promise<void> {
+  await deleteDoc(doc(colAplicacoes(uid), aplicacaoId));
+  await sincronizarAgenda(uid, protocolo, aplicacoesRestantes);
+}
+
+export type NovoMedicamento = Omit<Medicamento, 'id' | 'criadoEm'>;
+
+export async function criarMedicamento(uid: string, novo: NovoMedicamento): Promise<string> {
+  const criado = await addDoc(colMedicamentos(uid), {
+    ...novo,
+    criadoEm: new Date(),
+  } as Medicamento);
+  return criado.id;
+}
+
+export async function atualizarMedicamento(
+  uid: string,
+  medicamentoId: string,
+  campos: Partial<Medicamento>,
+): Promise<void> {
+  await updateDoc(doc(colMedicamentos(uid), medicamentoId), campos);
+}
+
+/**
+ * Exclui o medicamento do catálogo da conta, e nada mais.
+ *
+ * Protocolos e canetas guardam o nome denormalizado, então nenhum registro
+ * quebra e o histórico continua legível. O `medicamentoId` que sobrar
+ * apontando para o nada é absorvido na leitura — varrer o histórico para
+ * limpá-lo seria escrita em massa sem ganho.
+ */
+export async function excluirMedicamento(uid: string, medicamentoId: string): Promise<void> {
+  await deleteDoc(doc(colMedicamentos(uid), medicamentoId));
+}
+
+/**
+ * Semeia o catálogo embutido na conta, uma vez por versão.
+ *
+ * O id do documento é o `slug` da entrada, e não um id sorteado: se esta
+ * função rodar duas vezes (duas abas, StrictMode, marcador perdido), o segundo
+ * commit sobrescreve o mesmo doc em vez de duplicar o medicamento.
+ *
+ * O marcador entra no MESMO lote, então o commit é atômico: é impossível a
+ * versão avançar sem os documentos entrarem.
+ */
+export async function semearMedicamentos(uid: string, versaoAplicada: number): Promise<void> {
+  const pendentes = entradasPendentes(versaoAplicada);
+  if (pendentes.length === 0) return;
+
+  const lote = writeBatch(getDb());
+  const criadoEm = new Date();
+
+  pendentes.forEach((entrada) => {
+    lote.set(doc(colMedicamentos(uid), entrada.slug), {
+      ...paraMedicamento(entrada),
+      criadoEm,
+    } as Medicamento);
+  });
+  lote.set(refSementeCatalogo(uid), { versao: CATALOGO_VERSAO, semeadoEm: criadoEm });
+
+  await lote.commit();
+}
+
+/**
+ * Marca o catálogo como nunca semeado, para o hook repor a lista original.
+ *
+ * Só pode ser chamado a partir de uma ação explícita do usuário — é a única
+ * situação em que faz sentido trazer de volta o que ele mesmo excluiu.
+ */
+export async function reporCatalogo(uid: string): Promise<void> {
+  await semearMedicamentos(uid, 0);
+}
+
+export type NovoRegistroPeso = Omit<RegistroPeso, 'id'>;
+
+export async function criarRegistroPeso(uid: string, novo: NovoRegistroPeso): Promise<string> {
+  const criado = await addDoc(colHistoricoPeso(uid), novo as RegistroPeso);
+  return criado.id;
+}
+
+/** Progressive profiling: só é chamado na primeira vez que a pessoa registra um peso sem altura salva. */
+export async function atualizarAltura(uid: string, height: number): Promise<void> {
+  await setDoc(refUsuario(uid), { height }, { merge: true });
+}
+
+export type NovoRegistroHidratacao = Omit<RegistroHidratacao, 'id'>;
+
+export async function criarRegistroHidratacao(
+  uid: string,
+  novo: NovoRegistroHidratacao,
+): Promise<string> {
+  const criado = await addDoc(colHidratacao(uid), novo as RegistroHidratacao);
+  return criado.id;
+}
+
+export async function excluirRegistroHidratacao(uid: string, registroId: string): Promise<void> {
+  await deleteDoc(doc(colHidratacao(uid), registroId));
+}
+
+export async function atualizarMetaHidratacao(uid: string, hydration_goal: number): Promise<void> {
+  await setDoc(refUsuario(uid), { hydration_goal }, { merge: true });
+}
+
+export type NovoRegistroSintoma = Omit<RegistroSintoma, 'id'>;
+
+export async function criarRegistroSintoma(
+  uid: string,
+  novo: NovoRegistroSintoma,
+): Promise<string> {
+  const criado = await addDoc(colSintomas(uid), novo as RegistroSintoma);
+  return criado.id;
+}
+
+export async function excluirRegistroSintoma(uid: string, registroId: string): Promise<void> {
+  await deleteDoc(doc(colSintomas(uid), registroId));
+}
+
+export type NovoRegistroIntestino = Omit<RegistroIntestino, 'id'>;
+
+export async function criarRegistroIntestino(
+  uid: string,
+  novo: NovoRegistroIntestino,
+): Promise<string> {
+  const criado = await addDoc(colBowelLogs(uid), novo as RegistroIntestino);
+  return criado.id;
+}
+
+export async function excluirRegistroIntestino(uid: string, registroId: string): Promise<void> {
+  await deleteDoc(doc(colBowelLogs(uid), registroId));
+}
+
+export type NovoPlanoAlimentar = Omit<PlanoAlimentar, 'id' | 'createdAt'>;
+
+/**
+ * Cria um plano alimentar. Se `isActive`, arquiva (isActive:false) todos os
+ * outros planos da conta antes — mesmo desenho de `criarProtocolo`: um plano
+ * ativo por vez.
+ */
+export async function criarPlanoAlimentar(uid: string, novo: NovoPlanoAlimentar): Promise<string> {
+  if (novo.isActive) {
+    const anteriores = await getDocs(
+      query(colPlanosAlimentares(uid), where('isActive', '==', true)),
+    );
+    const lote = writeBatch(getDb());
+    anteriores.forEach((snap) => lote.update(snap.ref, { isActive: false }));
+    await lote.commit();
+  }
+
+  const criado = await addDoc(colPlanosAlimentares(uid), {
+    ...novo,
+    createdAt: new Date(),
+  } as PlanoAlimentar);
+  return criado.id;
+}
+
+export async function excluirPlanoAlimentar(uid: string, planoId: string): Promise<void> {
+  await deleteDoc(doc(colPlanosAlimentares(uid), planoId));
+}
+
+export async function atualizarPlanoAlimentar(
+  uid: string,
+  planoId: string,
+  campos: Partial<PlanoAlimentar>,
+): Promise<void> {
+  await updateDoc(doc(colPlanosAlimentares(uid), planoId), campos);
+}
+
+/**
+ * Sobe a foto para `users/{uid}/progress_photos/{arquivo}` e cria o registro
+ * correspondente no Firestore. Nome do arquivo prefixado com um id aleatório
+ * para duas fotos com o mesmo nome de arquivo não colidirem no Storage.
+ */
+export async function uploadFotoProgresso(
+  uid: string,
+  arquivo: File,
+  angle: AnguloFoto,
+): Promise<string> {
+  const storagePath = `users/${uid}/progress_photos/${crypto.randomUUID()}-${arquivo.name}`;
+  const referenciaArquivo = refStorage(getStorageCliente(), storagePath);
+
+  await uploadBytes(referenciaArquivo, arquivo);
+  const imageUrl = await getDownloadURL(referenciaArquivo);
+
+  const criado = await addDoc(colFotosProgresso(uid), {
+    imageUrl,
+    storagePath,
+    angle,
+    recordedAt: new Date(),
+  } as RegistroFoto);
+  return criado.id;
+}
+
+/** Remove o arquivo do Storage e o registro do Firestore. */
+export async function excluirFotoProgresso(uid: string, foto: RegistroFoto): Promise<void> {
+  try {
+    await deleteObject(refStorage(getStorageCliente(), foto.storagePath));
+  } catch (falha) {
+    // Arquivo já removido (ex.: exclusão duplicada) não deve impedir a
+    // limpeza do doc — só um erro de fato inesperado é logado.
+    const codigo = (falha as { code?: string }).code;
+    if (codigo !== 'storage/object-not-found') throw falha;
+  }
+  await deleteDoc(doc(colFotosProgresso(uid), foto.id));
+}
+
+/**
+ * Sobe a foto do prato para `users/{uid}/meals/{mealId}.jpg`. Não cria o
+ * registro no Firestore — isso só acontece depois que a IA responde (ver
+ * `criarRefeicaoPendente`).
+ */
+export async function uploadFotoRefeicao(
+  uid: string,
+  arquivo: File,
+): Promise<{ imageUrl: string; storagePath: string }> {
+  const storagePath = `users/${uid}/meals/${crypto.randomUUID()}.jpg`;
+  const referenciaArquivo = refStorage(getStorageCliente(), storagePath);
+
+  await uploadBytes(referenciaArquivo, arquivo);
+  const imageUrl = await getDownloadURL(referenciaArquivo);
+
+  return { imageUrl, storagePath };
+}
+
+export type NovaRefeicaoPendente = Pick<
+  RegistroRefeicao,
+  'imageUrl' | 'storagePath' | 'items' | 'macros' | 'aiFeedback'
+>;
+
+/** Cria o registro da refeição escaneada assim que a IA responde, com status `pending`. */
+export async function criarRefeicaoPendente(uid: string, nova: NovaRefeicaoPendente): Promise<string> {
+  const criado = await addDoc(colRefeicoes(uid), {
+    ...nova,
+    status: 'pending',
+    consumedPercentage: null,
+    createdAt: new Date(),
+  } as RegistroRefeicao);
+  return criado.id;
+}
+
+/** Atualiza os itens de uma refeição ainda pendente (usado pela edição manual antes de confirmar). */
+export async function atualizarItensRefeicaoPendente(
+  uid: string,
+  mealId: string,
+  items: RegistroRefeicao['items'],
+): Promise<void> {
+  await updateDoc(doc(colRefeicoes(uid), mealId), { items });
+}
+
+/**
+ * Confirma quanto da refeição foi de fato consumido: recalcula os macros
+ * proporcionalmente e marca como `completed`.
+ */
+export async function confirmarRefeicao(
+  uid: string,
+  mealId: string,
+  percentual: number,
+  macrosBase: MacrosRefeicao,
+): Promise<void> {
+  await updateDoc(doc(colRefeicoes(uid), mealId), {
+    status: 'completed',
+    consumedPercentage: percentual,
+    macros: macrosProporcionais(macrosBase, percentual),
+  });
+}
+
+/** Descarta um scan pendente: remove a foto do Storage e o registro do Firestore. */
+export async function descartarRefeicaoPendente(
+  uid: string,
+  refeicao: Pick<RegistroRefeicao, 'id' | 'storagePath'>,
+): Promise<void> {
+  try {
+    await deleteObject(refStorage(getStorageCliente(), refeicao.storagePath));
+  } catch (falha) {
+    const codigo = (falha as { code?: string }).code;
+    if (codigo !== 'storage/object-not-found') throw falha;
+  }
+  await deleteDoc(doc(colRefeicoes(uid), refeicao.id));
+}
+
+/** Exclui uma refeição já concluída: remove a foto do Storage e o registro do Firestore. */
+export async function excluirRefeicao(
+  uid: string,
+  refeicao: Pick<RegistroRefeicao, 'id' | 'storagePath'>,
+): Promise<void> {
+  try {
+    await deleteObject(refStorage(getStorageCliente(), refeicao.storagePath));
+  } catch (falha) {
+    const codigo = (falha as { code?: string }).code;
+    if (codigo !== 'storage/object-not-found') throw falha;
+  }
+  await deleteDoc(doc(colRefeicoes(uid), refeicao.id));
+}
+
+/* ---- Consultas prontas -------------------------------------------------- */
+
+/**
+ * Todos os protocolos, do mais novo ao mais antigo.
+ *
+ * Traz também os arquivados de propósito: mudar de dose cria um protocolo
+ * novo, e o histórico de aplicações só continua explicável meses depois se
+ * der para ver qual degrau valia em cada época.
+ */
+export const consultaProtocolos = (uid: string) =>
+  query(colProtocolos(uid), orderBy('criadoEm', 'desc'));
+
+export const consultaAplicacoes = (uid: string, maximo = 60) =>
+  query(colAplicacoes(uid), orderBy('dataHora', 'desc'), limit(maximo));
+
+export const consultaCanetasAtivas = (uid: string) =>
+  query(colCanetas(uid), where('ativa', '==', true));
+
+export const consultaHistoricoPeso = (uid: string, maximo = 5) =>
+  query(colHistoricoPeso(uid), orderBy('recordedAt', 'desc'), limit(maximo));
+
+export const consultaPlanosAlimentares = (uid: string) =>
+  query(colPlanosAlimentares(uid), orderBy('createdAt', 'desc'));
+
+export const consultaFotosProgresso = (uid: string) =>
+  query(colFotosProgresso(uid), orderBy('recordedAt', 'desc'));
+
+/** Refeições concluídas do dia corrente (hora local do dispositivo), da mais recente à mais antiga. */
+export const consultaRefeicoesDeHojeConcluidas = (uid: string) => {
+  const inicioDoDia = new Date();
+  inicioDoDia.setHours(0, 0, 0, 0);
+  const fimDoDia = new Date();
+  fimDoDia.setHours(23, 59, 59, 999);
+
+  return query(
+    colRefeicoes(uid),
+    where('status', '==', 'completed'),
+    where('createdAt', '>=', inicioDoDia),
+    where('createdAt', '<=', fimDoDia),
+    orderBy('createdAt', 'desc'),
+  );
+};
+
+/** Todas as refeições concluídas do usuário, da mais recente à mais antiga. */
+export const consultaTodasRefeicoesConcluidas = (uid: string, maximo = 200) =>
+  query(colRefeicoes(uid), where('status', '==', 'completed'), orderBy('createdAt', 'desc'), limit(maximo));
+
+/** Registros de hidratação do dia corrente (hora local do dispositivo), do mais recente ao mais antigo. */
+export const consultaHidratacaoHoje = (uid: string) => {
+  const inicioDoDia = new Date();
+  inicioDoDia.setHours(0, 0, 0, 0);
+  const fimDoDia = new Date();
+  fimDoDia.setHours(23, 59, 59, 999);
+
+  return query(
+    colHidratacao(uid),
+    where('recordedAt', '>=', inicioDoDia),
+    where('recordedAt', '<=', fimDoDia),
+    orderBy('recordedAt', 'desc'),
+  );
+};
+
+/** Sintomas registrados nos últimos 7 dias, do mais recente ao mais antigo. */
+export const consultaSintomasUltimos7Dias = (uid: string) => {
+  const seteDiasAtras = new Date();
+  seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+  seteDiasAtras.setHours(0, 0, 0, 0);
+
+  return query(
+    colSintomas(uid),
+    where('recordedAt', '>=', seteDiasAtras),
+    orderBy('recordedAt', 'desc'),
+  );
+};
+
+/**
+ * Últimos registros de evacuação, do mais recente ao mais antigo, sem corte por
+ * data — o alerta de constipação precisa enxergar o último registro mesmo que
+ * tenha sido há semanas.
+ */
+export const consultaIntestinoRecentes = (uid: string, maximo = 10) =>
+  query(colBowelLogs(uid), orderBy('recordedAt', 'desc'), limit(maximo));
+
+/**
+ * O catálogo da conta, sem ordenação do servidor.
+ *
+ * A ordem de exibição sai de `ordenarMedicamentos`: a ordenação do Firestore é
+ * por byte e jogaria "Ávita" para depois de "Zempneo". De quebra, evita índice.
+ */
+export const consultaMedicamentos = (uid: string) => query(colMedicamentos(uid));

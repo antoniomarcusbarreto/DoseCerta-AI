@@ -1,0 +1,10 @@
+rules_version = '2';
+
+// Mesmo modelo de firestore.rules: cada pessoa só alcança a própria árvore.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{uid}/{allPaths=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

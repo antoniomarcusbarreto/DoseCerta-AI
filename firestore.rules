@@ -1,0 +1,23 @@
+rules_version = '2';
+
+// DoseCerta — dado de saúde é dado pessoal sensível.
+// O modelo é de paciente individual: cada pessoa só alcança a própria árvore.
+// Não há compartilhamento, então não há regra que autorize leitura de terceiro.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+      match /{documento=**} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+
+    // Nada fora de /users é acessível pelo cliente. A Cloud Function de
+    // lembretes usa o Admin SDK, que passa por cima destas regras.
+    match /{documento=**} {
+      allow read, write: if false;
+    }
+  }
+}

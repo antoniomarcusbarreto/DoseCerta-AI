@@ -1,0 +1,256 @@
+@import '@fontsource-variable/inter';
+@import 'tailwindcss';
+@import './tokens.css';
+
+/*
+ * Ponte entre os tokens e o Tailwind v4: cada token vira uma utility
+ * (bg-card, text-ink, rounded-card…) para não espalhar var() pelo JSX.
+ */
+@theme inline {
+  --color-page: var(--surface-page);
+  --color-desk: var(--surface-desk);
+  --color-card: var(--surface-card);
+  --color-sunken: var(--surface-sunken);
+  --color-glass: var(--surface-glass);
+  --color-hair: var(--border-hair);
+  --color-glass-edge: var(--border-glass);
+
+  --color-on-hero: var(--on-hero);
+  --color-on-hero-muted: var(--on-hero-muted);
+  --color-on-hero-faint: var(--on-hero-faint);
+
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --radius-card: var(--r-card);
+  --radius-glass: var(--r-glass);
+  --radius-field: var(--r-field);
+
+  --font-sans: var(--font-sans);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-glass: var(--shadow-glass);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-page);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* O app é uma coluna que rola; nada rola na horizontal. */
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+}
+
+/*
+ * Escala tipográfica. A hierarquia vem do TAMANHO, não do peso nem da cor —
+ * é o que faz a referência funcionar. O número gigante é leve (300), não bold.
+ */
+.t-display {
+  font-size: clamp(52px, 16vw, 68px);
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.t-stat {
+  font-size: clamp(30px, 9vw, 38px);
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+
+.t-title {
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.t-body {
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.t-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Os rótulos minúsculos e espaçados que aparecem acima de cada número. */
+.t-caption {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/*
+ * Degrau tipográfico do desktop.
+ *
+ * As clamp() acima usam vw, que é a largura do VIEWPORT — e não do container.
+ * Como o teto de 68px/38px é atingido já em ~425px de janela, no PC elas vivem
+ * permanentemente travadas no máximo. Só uma media query dá headroom.
+ */
+@media (min-width: 64rem) {
+  .t-display {
+    font-size: 76px;
+  }
+
+  .t-stat {
+    font-size: 42px;
+  }
+}
+
+/*
+ * ---- Estrutura de layout ----
+ *
+ * Estas classes existem porque a geometria delas muda por breakpoint, e o app
+ * as aplicava em `style` inline — onde nenhuma variante `lg:` do Tailwind
+ * alcança, já que inline sempre vence. Regra da casa: `style` inline só para
+ * cor/token que não varia com a largura; geometria com breakpoint vem para cá.
+ *
+ * Vão em `@layer components` de propósito: fora de layer elas venceriam as
+ * utilities do Tailwind (regra do cascade: o que não está em layer ganha de
+ * tudo que está), e telas como a de foco precisam poder apertar o trilho com
+ * um `lg:max-w-[...]` por cima.
+ */
+@layer components {
+  /*
+   * Trilho horizontal do conteúdo. O herói e o <main> usam o MESMO trilho,
+   * senão o texto do herói não alinha com os cards abaixo dele.
+   */
+  .faixa {
+    margin-inline: auto;
+    width: 100%;
+    max-width: var(--largura-faixa);
+    padding-inline: var(--gutter);
+  }
+
+  @media (min-width: 64rem) {
+    .faixa {
+      padding-inline: 2rem;
+    }
+  }
+
+  /*
+   * A coluna do app. Até 1023px ela é a moldura de celular centralizada; a
+   * partir do desktop dissolve, e quem limita passa a ser o trilho .faixa.
+   */
+  .casca-app {
+    margin-inline: auto;
+    width: 100%;
+    max-width: var(--largura-casca);
+    background: var(--surface-page);
+  }
+
+  @media (min-width: 40rem) and (max-width: 63.99rem) {
+    .casca-app {
+      border-inline: 1px solid var(--border-hair);
+      box-shadow: var(--shadow-card);
+    }
+  }
+
+  /*
+   * Reserva do espaço da navegação: altura da barra embaixo no celular,
+   * largura da lateral no desktop. Sem zerar o padding-bottom no lg sobraria
+   * uma faixa morta de 56px no rodapé de todas as telas do PC.
+   */
+  .casca-conteudo {
+    padding-bottom: calc(var(--altura-abas) + env(safe-area-inset-bottom, 0px));
+  }
+
+  @media (min-width: 64rem) {
+    .casca-conteudo {
+      padding-bottom: 0;
+      padding-left: var(--largura-nav);
+    }
+  }
+
+  /* Topo do herói: safe area no celular, respiro de verdade no desktop. */
+  .faixa-hero {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 12px);
+  }
+
+  @media (min-width: 64rem) {
+    .faixa-hero {
+      padding-top: 2rem;
+    }
+  }
+
+  /*
+   * Tela de tarefa única (formulário): o trilho aperta no desktop. Feito pela
+   * variável, e não por um max-width no <main>, porque assim o herói e o
+   * conteúdo continuam lendo a MESMA medida e permanecem alinhados — com o
+   * cap só no <main> o título ficava numa vertical e o formulário em outra.
+   *
+   * Só a partir do lg: abaixo disso a coluna já é estreita, e apertar de novo
+   * abriria uma margem dentro da margem.
+   */
+  @media (min-width: 64rem) {
+    .trilho-foco {
+      --largura-faixa: 35rem;
+    }
+  }
+}
+
+/*
+ * Folha de ação. No celular ela encosta no rodapé, então só os cantos de cima
+ * são arredondados; quando vira diálogo centralizado (sm+), os quatro cantos
+ * precisam acompanhar, senão a base fica cortada em cima do escurecimento.
+ */
+.folha {
+  border-radius: var(--r-card) var(--r-card) 0 0;
+}
+
+@media (min-width: 40rem) {
+  .folha {
+    border-radius: var(--r-card);
+  }
+}
+
+/*
+ * O preflight do Tailwind v4 dá `cursor: default` a <button>. No celular
+ * ninguém percebe; no desktop o app inteiro fica sem resposta ao mouse.
+ */
+@layer base {
+  button:not(:disabled),
+  [role='button']:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+}
+
+/* Foco visível em qualquer superfície, clara ou escura. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

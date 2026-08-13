@@ -1,0 +1,261 @@
+/*
+ * DoseCerta — tokens de design
+ *
+ * Derivados da referência visual: gradiente atmosférico como identidade,
+ * zero cor de destaque saturada, número gigante em peso leve, gráficos em
+ * fio de cabelo, cards brancos de canto muito arredondado, vidro fosco.
+ *
+ * Desvio deliberado da referência: os cinzas de texto funcional foram
+ * escurecidos até passar em WCAG AA. O cinza quase invisível do shot vive
+ * apenas em --ink-faint, restrito a ornamento (gridline, eixo, divisor).
+ */
+
+:root {
+  /* ---- Gradiente herói — a identidade visual do app ---- */
+  --hero-0: #3b4c5e;
+  --hero-1: #6c8496;
+  --hero-2: #c3d2d9;
+  --hero-3: #eef2f4;
+  --grad-hero: linear-gradient(
+    180deg,
+    var(--hero-0) 0%,
+    var(--hero-1) 45%,
+    var(--hero-2) 78%,
+    var(--hero-3) 100%
+  );
+
+  /*
+   * Deslocamento quente do herói: usado quando há aplicação atrasada.
+   *
+   * O último stop é --surface-page, não uma cor literal: no desktop os cards
+   * ficam em duas colunas e o vão entre elas expõe a base do gradiente. Com
+   * cor literal aparecia uma costura ali (no claro, #f4f1ee contra #eef2f4).
+   */
+  --grad-hero-alerta: linear-gradient(
+    180deg,
+    #5e4a3b 0%,
+    #967c6c 45%,
+    #d9cec3 78%,
+    var(--surface-page) 100%
+  );
+
+  /* Splash de tela cheia — era literal e duplicado no Layout e no TelaAuth. */
+  --grad-splash: linear-gradient(180deg, var(--hero-0) 0%, var(--hero-1) 100%);
+
+  /* ---- Superfícies ---- */
+  --surface-page: #eef2f4;
+  /* Fundo que sobra ao redor da coluna do app em telas largas. Um tom abaixo
+     da página: é o que faz a coluna ler como app, e não como faixa cortada. */
+  --surface-desk: #e2e8ec;
+  --surface-card: #ffffff;
+  --surface-sunken: #f4f7f8;
+  --surface-glass: rgba(255, 255, 255, 0.18);
+  --border-glass: rgba(255, 255, 255, 0.28);
+  --border-hair: rgba(18, 24, 31, 0.08);
+
+  /* ---- Texto sobre o gradiente ---- */
+  --on-hero: #ffffff;
+  --on-hero-muted: rgba(255, 255, 255, 0.78);
+  --on-hero-faint: rgba(255, 255, 255, 0.42);
+
+  /* ---- Texto sobre card ---- */
+  --ink: #12181f;
+  --ink-muted: #5a6873;
+  --ink-faint: #9aa6af;
+
+  /* ---- Semânticos — únicos pontos de cor no app ---- */
+  --ok: #2e7d5b;
+  --ok-soft: #e6f2ec;
+  --warn: #b4741f;
+  --warn-soft: #fbf1e2;
+  --danger: #b3372f;
+  --danger-soft: #fbeae9;
+
+  /* ---- Forma ---- */
+  --r-card: 24px;
+  --r-glass: 20px;
+  --r-field: 14px;
+  --r-pill: 999px;
+  --hairline: 1.5px;
+
+  /* ---- Elevação — sombras baixas e difusas, nunca duras ---- */
+  --shadow-card: 0 1px 2px rgba(18, 24, 31, 0.04), 0 8px 24px rgba(18, 24, 31, 0.06);
+  --shadow-glass: 0 8px 32px rgba(18, 24, 31, 0.12);
+
+  /* ---- Ritmo ---- */
+  --gutter: 20px;
+  --touch-min: 44px;
+
+  /*
+   * ---- Layout responsivo ----
+   *
+   * O app é uma coluna de celular até 1023px e vira painel com navegação
+   * lateral a partir de 1024px. Estes valores ficam em token, e não em classe
+   * do Tailwind, porque precisam ser lidos por vários lugares que têm de
+   * concordar entre si — em especial a coluna e a barra de abas, que ficam
+   * desalinhadas se uma mudar sem a outra.
+   */
+  --largura-nav: 15rem; /* 240px — navegação lateral do desktop */
+  --altura-abas: 56px; /* casa com o min-h-14 do NavLink da barra */
+  --largura-casca: 28rem; /* teto da coluna; some no desktop */
+  --largura-faixa: 100%; /* trilho interno do conteúdo; só ganha teto no lg */
+  --nav-ativo: rgba(18, 24, 31, 0.06); /* fundo do item de navegação em uso */
+
+  /* ---- Tipografia ---- */
+  --font-sans:
+    'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+/* Tablet e janela média: a coluna respira, mas o formato ainda é de coluna. */
+@media (min-width: 48rem) {
+  :root {
+    --largura-casca: 40rem;
+  }
+}
+
+/*
+ * Desktop: a coluna deixa de existir (o conteúdo ocupa a área ao lado da
+ * navegação lateral) e quem passa a limitar é o trilho interno.
+ */
+@media (min-width: 64rem) {
+  :root {
+    --largura-casca: none;
+    --largura-faixa: 70rem;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    /* O gradiente herói já é escuro: permanece. Só as superfícies invertem. */
+    --hero-2: #2a3540;
+    --hero-3: #10151a;
+    --grad-hero-alerta: linear-gradient(
+      180deg,
+      #5e4a3b 0%,
+      #7a6355 45%,
+      #3a3029 78%,
+      var(--surface-page) 100%
+    );
+
+    --surface-page: #10151a;
+    --surface-desk: #05080a;
+    --nav-ativo: rgba(255, 255, 255, 0.08);
+    --surface-card: #171c22;
+    --surface-sunken: #1d232a;
+    --surface-glass: rgba(255, 255, 255, 0.1);
+    --border-glass: rgba(255, 255, 255, 0.16);
+    --border-hair: rgba(255, 255, 255, 0.1);
+
+    --ink: #f2f5f7;
+    --ink-muted: #9dabb5;
+    --ink-faint: #5d6a74;
+
+    --ok: #5fbf93;
+    --ok-soft: #16302a;
+    --warn: #dda75a;
+    --warn-soft: #33281a;
+    --danger: #e57a72;
+    --danger-soft: #33201f;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.28);
+    --shadow-glass: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+}
+
+:root[data-theme='oceano-escuro'] {
+  --hero-2: #2a3540;
+  --hero-3: #10151a;
+  --grad-hero-alerta: linear-gradient(
+    180deg,
+    #5e4a3b 0%,
+    #7a6355 45%,
+    #3a3029 78%,
+    var(--surface-page) 100%
+  );
+
+  --surface-page: #10151a;
+  --surface-desk: #05080a;
+  --nav-ativo: rgba(255, 255, 255, 0.08);
+  --surface-card: #171c22;
+  --surface-sunken: #1d232a;
+  --surface-glass: rgba(255, 255, 255, 0.1);
+  --border-glass: rgba(255, 255, 255, 0.16);
+  --border-hair: rgba(255, 255, 255, 0.1);
+
+  --ink: #f2f5f7;
+  --ink-muted: #9dabb5;
+  --ink-faint: #5d6a74;
+
+  --ok: #5fbf93;
+  --ok-soft: #16302a;
+  --warn: #dda75a;
+  --warn-soft: #33281a;
+  --danger: #e57a72;
+  --danger-soft: #33201f;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-glass: 0 8px 32px rgba(0, 0, 0, 0.4);
+
+  --btn-primary-bg: #f2f5f7; /* same as var(--ink) */
+  --btn-primary-text: #171c22; /* same as var(--surface-card) */
+}
+
+:root[data-theme='menta-claro'] {
+  --hero-0: #14b8a6;
+  --hero-1: #0f766e;
+  --hero-2: #ccfbf1;
+  --hero-3: #f8fafc;
+  --grad-hero: linear-gradient(180deg, var(--hero-0) 0%, var(--hero-1) 100%);
+  --grad-hero-alerta: linear-gradient(180deg, #d97706 0%, #b45309 100%);
+  
+  --surface-page: #f8fafc;
+  --surface-desk: #f1f5f9;
+  --nav-ativo: rgba(15, 23, 42, 0.06);
+  --surface-card: #ffffff;
+  --surface-sunken: #f1f5f9;
+  --surface-glass: rgba(255, 255, 255, 0.6);
+  --border-glass: rgba(15, 23, 42, 0.1);
+  --border-hair: rgba(15, 23, 42, 0.1);
+
+  --ink: #0f172a;
+  --ink-muted: #64748b;
+  --ink-faint: #94a3b8;
+
+  --on-hero: #ffffff;
+  --on-hero-muted: rgba(255, 255, 255, 0.8);
+
+  --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+
+  --btn-primary-bg: #0d9488;
+  --btn-primary-text: #ffffff;
+}
+
+:root[data-theme='lavanda-clara'] {
+  --hero-0: #a855f7;
+  --hero-1: #7e22ce;
+  --hero-2: #f3e8ff;
+  --hero-3: #fdf4ff;
+  --grad-hero: linear-gradient(180deg, var(--hero-0) 0%, var(--hero-1) 100%);
+  --grad-hero-alerta: linear-gradient(180deg, #d97706 0%, #b45309 100%);
+
+  --surface-page: #fdf4ff;
+  --surface-desk: #fae8ff;
+  --nav-ativo: rgba(15, 23, 42, 0.06);
+  --surface-card: #ffffff;
+  --surface-sunken: #fae8ff;
+  --surface-glass: rgba(255, 255, 255, 0.6);
+  --border-glass: rgba(15, 23, 42, 0.1);
+  --border-hair: rgba(15, 23, 42, 0.1);
+
+  --ink: #0f172a;
+  --ink-muted: #64748b;
+  --ink-faint: #94a3b8;
+
+  --on-hero: #ffffff;
+  --on-hero-muted: rgba(255, 255, 255, 0.8);
+
+  --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+
+  --btn-primary-bg: #7c3aed;
+  --btn-primary-text: #ffffff;
+}
