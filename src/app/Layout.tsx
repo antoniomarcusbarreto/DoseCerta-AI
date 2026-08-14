@@ -1,4 +1,5 @@
 import { Outlet } from 'react-router-dom';
+import { InstalacaoWizard } from '@/components/InstalacaoWizard';
 import { Onboarding } from '@/features/protocolo/Onboarding';
 import { useDados } from '@/features/dados/DadosProvider';
 import { Casca } from './Casca';
@@ -34,9 +35,12 @@ export function Layout() {
   if (!protocolo) return <Onboarding uid={uid} />;
 
   return (
-    <Casca>
-      <RolarAoTopo />
-      <Outlet />
-    </Casca>
+    <>
+      <Casca>
+        <RolarAoTopo />
+        <Outlet />
+      </Casca>
+      <InstalacaoWizard />
+    </>
   );
 }

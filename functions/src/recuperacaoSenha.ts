@@ -1,0 +1,223 @@
+import { createHash, randomInt } from 'node:crypto';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { defineSecret } from 'firebase-functions/params';
+
+const REGIAO = 'southamerica-east1';
+const REMETENTE = 'Dose Certa-AI <suporte@notificacoes.dosecerta-ai.com>';
+const RESPONDER_PARA = 'suporte@dosecerta-ai.com';
+const COOLDOWN_MS = 60 * 1000;
+const EXPIRACAO_MS = 10 * 60 * 1000;
+const EXPIRACAO_MINUTOS = EXPIRACAO_MS / 60_000;
+const MAX_TENTATIVAS = 5;
+
+const resendApiKey = defineSecret('RESEND_API_KEY');
+
+function hashCodigo(codigo: string): string {
+  return createHash('sha256').update(codigo).digest('hex');
+}
+
+async function buscarUidPorEmail(email: string): Promise<string> {
+  try {
+    const usuario = await getAuth().getUserByEmail(email);
+    return usuario.uid;
+  } catch {
+    throw new HttpsError('not-found', 'E-mail inválido ou não cadastrado.');
+  }
+}
+
+function montarEmailHtml(codigo: string): string {
+  return `<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Código de redefinição de senha</title>
+    <style>
+      @media (max-width: 600px) {
+        .container { width: 100% !important; }
+        .codigo { font-size: 28px !important; letter-spacing: 6px !important; padding: 16px 20px !important; }
+      }
+    </style>
+  </head>
+  <body style="margin:0; padding:0; background-color:#eef1f4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef1f4; padding: 32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" style="width:600px; max-width:100%; background-color:#ffffff; border-radius:16px; overflow:hidden; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);">
+            <tr>
+              <td style="background-color:#3b4c5e; padding: 28px 32px;">
+                <span style="font-size:22px; font-weight:800; color:#ffffff;">Dose Certa<span style="color:#2dd4bf;">-AI</span></span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 32px;">
+                <p style="margin:0 0 8px; font-size:16px; color:#1e293b;">Olá,</p>
+                <p style="margin:0 0 24px; font-size:15px; line-height:1.6; color:#475569;">
+                  Recebemos uma solicitação para redefinir a senha da sua conta. Use o código abaixo para continuar:
+                </p>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td align="center">
+                      <div class="codigo" style="display:inline-block; background-color:#e6f7f5; border:2px solid #0d9488; border-radius:14px; padding:20px 32px; font-family: 'Courier New', Courier, monospace; font-size:36px; font-weight:700; letter-spacing:10px; color:#0f766e;">
+                        ${codigo}
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0; text-align:center; font-size:13px; color:#94a3b8;">
+                  ⏱️ Este código expira em ${EXPIRACAO_MINUTOS} minutos.
+                </p>
+                <p style="margin:24px 0 0; font-size:14px; line-height:1.6; color:#475569;">
+                  Se você não solicitou essa redefinição, pode ignorar este e-mail com segurança — sua senha continuará a mesma.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 20px 32px; background-color:#f8fafc; border-top:1px solid #e2e8f0;">
+                <p style="margin:0; font-size:12px; color:#94a3b8;">
+                  Precisa de ajuda? Responda este e-mail ou fale com a gente em
+                  <a href="mailto:${RESPONDER_PARA}" style="color:#0d9488; text-decoration:none;">${RESPONDER_PARA}</a>.
+                </p>
+                <p style="margin:8px 0 0; font-size:12px; color:#cbd5e1;">Equipe Dose Certa-AI</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
+function montarEmailTexto(codigo: string): string {
+  return [
+    'Olá,',
+    '',
+    'Recebemos uma solicitação para redefinir a senha da sua conta no Dose Certa-AI.',
+    `Código: ${codigo}`,
+    '',
+    `Este código expira em ${EXPIRACAO_MINUTOS} minutos.`,
+    'Se você não solicitou essa redefinição, ignore este e-mail.',
+    '',
+    'Equipe Dose Certa-AI',
+  ].join('\n');
+}
+
+async function enviarEmailComCodigo(email: string, codigo: string): Promise<void> {
+  const resposta = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${resendApiKey.value()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: REMETENTE,
+      to: email,
+      reply_to: RESPONDER_PARA,
+      subject: 'Código de redefinição de senha - Dose Certa-AI',
+      html: montarEmailHtml(codigo),
+      text: montarEmailTexto(codigo),
+    }),
+  });
+
+  if (!resposta.ok) {
+    const corpo = await resposta.text();
+    console.error('[enviarCodigoRecuperacao] falha ao enviar via Resend', resposta.status, corpo);
+    throw new HttpsError('internal', 'Não foi possível enviar o e-mail. Tente novamente.');
+  }
+}
+
+export const enviarCodigoRecuperacao = onCall(
+  { region: REGIAO, cors: true, secrets: [resendApiKey] },
+  async (request) => {
+    const { email } = request.data as { email?: string };
+    if (!email) {
+      throw new HttpsError('invalid-argument', 'E-mail é obrigatório.');
+    }
+
+    const uid = await buscarUidPorEmail(email);
+    const db = getFirestore();
+    const ref = db.collection('codigosRecuperacao').doc(uid);
+
+    const existente = await ref.get();
+    if (existente.exists) {
+      const criadoEm = (existente.data()?.criadoEm as Timestamp | undefined)?.toMillis() ?? 0;
+      if (Date.now() - criadoEm < COOLDOWN_MS) {
+        throw new HttpsError('resource-exhausted', 'Aguarde um minuto antes de solicitar outro código.');
+      }
+    }
+
+    const codigo = randomInt(100000, 1000000).toString();
+
+    try {
+      await enviarEmailComCodigo(email, codigo);
+    } catch (falha) {
+      if (falha instanceof HttpsError) throw falha;
+      console.error('[enviarCodigoRecuperacao] falha inesperada', uid, falha);
+      throw new HttpsError('internal', 'Não foi possível enviar o e-mail. Tente novamente.');
+    }
+
+    await ref.set({
+      hash: hashCodigo(codigo),
+      expiraEm: Timestamp.fromMillis(Date.now() + EXPIRACAO_MS),
+      tentativas: 0,
+      criadoEm: Timestamp.now(),
+    });
+
+    return { sucesso: true };
+  },
+);
+
+export const redefinirSenhaComCodigo = onCall({ region: REGIAO, cors: true }, async (request) => {
+  const { email, codigo, novaSenha } = request.data as {
+    email?: string;
+    codigo?: string;
+    novaSenha?: string;
+  };
+
+  if (!email || !codigo || !novaSenha) {
+    throw new HttpsError('invalid-argument', 'E-mail, código e nova senha são obrigatórios.');
+  }
+  if (novaSenha.length < 6) {
+    throw new HttpsError('invalid-argument', 'A nova senha precisa de pelo menos 6 caracteres.');
+  }
+
+  const uid = await buscarUidPorEmail(email);
+  const db = getFirestore();
+  const ref = db.collection('codigosRecuperacao').doc(uid);
+  const doc = await ref.get();
+
+  if (!doc.exists) {
+    throw new HttpsError('failed-precondition', 'Solicite um novo código.');
+  }
+
+  const dados = doc.data() as { hash: string; expiraEm: Timestamp; tentativas: number };
+
+  if (dados.expiraEm.toMillis() < Date.now()) {
+    await ref.delete();
+    throw new HttpsError('deadline-exceeded', 'Código expirado. Solicite um novo.');
+  }
+
+  if (dados.tentativas >= MAX_TENTATIVAS) {
+    await ref.delete();
+    throw new HttpsError('resource-exhausted', 'Muitas tentativas. Solicite um novo código.');
+  }
+
+  if (hashCodigo(codigo) !== dados.hash) {
+    await ref.update({ tentativas: dados.tentativas + 1 });
+    throw new HttpsError('invalid-argument', 'Código incorreto.');
+  }
+
+  try {
+    await getAuth().updateUser(uid, { password: novaSenha });
+  } catch (falha) {
+    console.error('[redefinirSenhaComCodigo] falha ao atualizar senha', uid, falha);
+    throw new HttpsError('internal', 'Não foi possível redefinir a senha. Tente novamente.');
+  }
+
+  await ref.delete();
+
+  return { sucesso: true };
+});

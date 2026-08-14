@@ -10,19 +10,23 @@ import {
 } from 'react';
 import {
   createUserWithEmailAndPassword,
+  EmailAuthProvider,
   getRedirectResult,
   GoogleAuthProvider,
   linkWithCredential,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   signInWithEmailAndPassword,
   signInWithPopup,
   signInWithRedirect,
   signOut,
+  updatePassword,
   updateProfile,
   type AuthCredential,
   type User,
 } from 'firebase/auth';
-import { getAuthCliente, getGoogleProvider, firebaseConfigurado } from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getAuthCliente, getFunctionsCliente, getGoogleProvider, firebaseConfigurado } from '@/lib/firebase';
 import { garantirPerfil } from '@/features/dados/repositorio';
 import { limparEstadoLocal, rodandoComoPWAInstalado, validarSessao } from './sessao';
 
@@ -38,6 +42,9 @@ type AuthContexto = {
   vinculoPendente: VinculoPendente | null;
   entrar: (email: string, senha: string) => Promise<void>;
   criarConta: (nome: string, email: string, senha: string) => Promise<void>;
+  enviarCodigoRecuperacao: (email: string) => Promise<void>;
+  redefinirSenhaComCodigo: (email: string, codigo: string, novaSenha: string) => Promise<void>;
+  alterarSenha: (senhaAtual: string, novaSenha: string) => Promise<void>;
   entrarComGoogle: () => Promise<void>;
   vincularComSenha: (senha: string) => Promise<void>;
   cancelarVinculo: () => void;
@@ -73,6 +80,8 @@ const Contexto = createContext<AuthContexto | null>(null);
 
 const MSG_SESSAO_ENCERRADA =
   'Sua sessão foi encerrada porque esta conta não está mais ativa. Entre novamente.';
+
+const MSG_SENHA_ALTERADA = 'Senha alterada com sucesso. Faça login novamente.';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [usuario, setUsuario] = useState<User | null>(null);
@@ -174,6 +183,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const enviarCodigoRecuperacao = useCallback(async (email: string) => {
+    const chamar = httpsCallable(getFunctionsCliente(), 'enviarCodigoRecuperacao');
+    await chamar({ email });
+  }, []);
+
+  const redefinirSenhaComCodigo = useCallback(async (email: string, codigo: string, novaSenha: string) => {
+    const chamar = httpsCallable(getFunctionsCliente(), 'redefinirSenhaComCodigo');
+    await chamar({ email, codigo, novaSenha });
+  }, []);
+
+  const alterarSenha = useCallback(async (senhaAtual: string, novaSenha: string) => {
+    const auth = getAuthCliente();
+    const atual = auth.currentUser;
+    if (!atual?.email) throw new Error('Nenhum usuário autenticado.');
+
+    const credencial = EmailAuthProvider.credential(atual.email, senhaAtual);
+    await reauthenticateWithCredential(atual, credencial);
+    await updatePassword(atual, novaSenha);
+
+    await signOut(auth);
+    limparEstadoLocal();
+    setMotivoSaida(MSG_SENHA_ALTERADA);
+  }, []);
+
   const entrarComGoogle = useCallback(async () => {
     setMotivoSaida(null);
     setVinculoPendente(null);
@@ -236,6 +269,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       vinculoPendente,
       entrar,
       criarConta,
+      enviarCodigoRecuperacao,
+      redefinirSenhaComCodigo,
+      alterarSenha,
       entrarComGoogle,
       vincularComSenha,
       cancelarVinculo,
@@ -248,6 +284,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       vinculoPendente,
       entrar,
       criarConta,
+      enviarCodigoRecuperacao,
+      redefinirSenhaComCodigo,
+      alterarSenha,
       entrarComGoogle,
       vincularComSenha,
       cancelarVinculo,

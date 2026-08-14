@@ -1,6 +1,8 @@
 import {
+  arrayUnion,
   collection,
   doc,
+  setDoc,
   Timestamp,
   type CollectionReference,
   type DocumentData,
@@ -411,6 +413,14 @@ const conversorCampoUsuario: FirestoreDataConverter<CampoUsuario, DocumentData> 
 /** Doc raiz do usuário, só para o campo `height` — `docUsuario` acima fica sem converter porque também serve de pai para as subcoleções. */
 export const refUsuario = (uid: string) =>
   doc(getDb(), 'users', uid).withConverter(conversorCampoUsuario);
+
+/**
+ * Adiciona o token FCM do dispositivo atual ao array `fcmTokens` do doc raiz
+ * do usuário. `arrayUnion` evita duplicar o mesmo token a cada
+ * `getToken()` (o SDK costuma devolver o mesmo token enquanto ele for válido).
+ */
+export const salvarTokenFcm = (uid: string, token: string) =>
+  setDoc(docUsuario(uid), { fcmTokens: arrayUnion(token) }, { merge: true });
 
 export const refPerfil = (uid: string) =>
   doc(getDb(), 'users', uid, 'meta', 'perfil').withConverter(conversorPerfil);

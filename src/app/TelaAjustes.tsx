@@ -66,19 +66,14 @@ export function TelaAjustes() {
       descricao: 'Dúvidas, bugs ou sugestões',
     },
     {
-      titulo: 'Canetas',
-      descricao: 'Estoque, lote e validade após a abertura',
-      emBreve: true,
-    },
-    {
+      para: '/ajustes/lembretes',
       titulo: 'Lembretes',
       descricao: 'Notificação no dia da aplicação',
-      emBreve: true,
     },
     {
+      para: '/ajustes/meus-dados',
       titulo: 'Meus dados',
-      descricao: 'Exportar tudo e excluir a conta',
-      emBreve: true,
+      descricao: 'Senha, assinatura e exclusão de conta',
     },
   ];
 

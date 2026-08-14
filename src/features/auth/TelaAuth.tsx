@@ -17,17 +17,41 @@ const MENSAGEM_ERRO: Record<string, string> = {
   'auth/network-request-failed': 'Sem conexão. Verifique a internet e tente de novo.',
 };
 
+function codigoDoErro(erro: unknown): string {
+  return typeof erro === 'object' && erro !== null && 'code' in erro
+    ? String((erro as { code: unknown }).code)
+    : '';
+}
+
 function traduzirErro(erro: unknown): string {
-  const codigo =
-    typeof erro === 'object' && erro !== null && 'code' in erro
-      ? String((erro as { code: unknown }).code)
-      : '';
-  return MENSAGEM_ERRO[codigo] ?? 'Não foi possível concluir. Tente novamente.';
+  return MENSAGEM_ERRO[codigoDoErro(erro)] ?? 'Não foi possível concluir. Tente novamente.';
+}
+
+const MENSAGEM_ERRO_RECUPERACAO: Record<string, string> = {
+  'functions/not-found': 'E-mail inválido ou não cadastrado.',
+  'functions/invalid-argument': 'Código incorreto.',
+  'functions/failed-precondition': 'Solicite um novo código.',
+  'functions/deadline-exceeded': 'Código expirado. Solicite um novo.',
+  'functions/resource-exhausted': 'Muitas tentativas. Aguarde um pouco e tente de novo.',
+};
+
+function traduzirErroRecuperacao(erro: unknown): string {
+  return MENSAGEM_ERRO_RECUPERACAO[codigoDoErro(erro)] ?? 'Não foi possível concluir. Tente novamente.';
 }
 
 export function TelaAuth({ modo }: { modo: Modo }) {
-  const { usuario, entrar, criarConta, entrarComGoogle, vinculoPendente, vincularComSenha, cancelarVinculo, motivoSaida } =
-    useAuth();
+  const {
+    usuario,
+    entrar,
+    criarConta,
+    enviarCodigoRecuperacao,
+    redefinirSenhaComCodigo,
+    entrarComGoogle,
+    vinculoPendente,
+    vincularComSenha,
+    cancelarVinculo,
+    motivoSaida,
+  } = useAuth();
 
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
@@ -37,8 +61,28 @@ export function TelaAuth({ modo }: { modo: Modo }) {
   const [enviando, setEnviando] = useState(false);
   const [enviandoGoogle, setEnviandoGoogle] = useState(false);
   const [senhaVinculo, setSenhaVinculo] = useState('');
+  const [aceitouTermos, setAceitouTermos] = useState(false);
+
+  const [mostrarRecuperacao, setMostrarRecuperacao] = useState(false);
+  const [etapaRecuperacao, setEtapaRecuperacao] = useState<'email' | 'codigo' | 'sucesso'>('email');
+  const [emailRecuperacao, setEmailRecuperacao] = useState('');
+  const [codigoRecuperacao, setCodigoRecuperacao] = useState('');
+  const [novaSenhaRecuperacao, setNovaSenhaRecuperacao] = useState('');
+  const [confirmarSenhaRecuperacao, setConfirmarSenhaRecuperacao] = useState('');
+  const [enviandoRecuperacao, setEnviandoRecuperacao] = useState(false);
+  const [erroRecuperacao, setErroRecuperacao] = useState<string | null>(null);
 
   const criando = modo === 'criar';
+
+  function fecharRecuperacao() {
+    setMostrarRecuperacao(false);
+    setEtapaRecuperacao('email');
+    setEmailRecuperacao('');
+    setCodigoRecuperacao('');
+    setNovaSenhaRecuperacao('');
+    setConfirmarSenhaRecuperacao('');
+    setErroRecuperacao(null);
+  }
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();
@@ -50,6 +94,40 @@ export function TelaAuth({ modo }: { modo: Modo }) {
     } catch (falha) {
       setErro(traduzirErro(falha));
       setEnviando(false);
+    }
+  }
+
+  async function enviarCodigo(evento?: FormEvent) {
+    evento?.preventDefault();
+    setErroRecuperacao(null);
+    setEnviandoRecuperacao(true);
+    try {
+      await enviarCodigoRecuperacao(emailRecuperacao);
+      setEtapaRecuperacao('codigo');
+    } catch (falha) {
+      setErroRecuperacao(traduzirErroRecuperacao(falha));
+    } finally {
+      setEnviandoRecuperacao(false);
+    }
+  }
+
+  async function confirmarRedefinicao(evento: FormEvent) {
+    evento.preventDefault();
+    setErroRecuperacao(null);
+
+    if (novaSenhaRecuperacao !== confirmarSenhaRecuperacao) {
+      setErroRecuperacao('As senhas não coincidem.');
+      return;
+    }
+
+    setEnviandoRecuperacao(true);
+    try {
+      await redefinirSenhaComCodigo(emailRecuperacao, codigoRecuperacao, novaSenhaRecuperacao);
+      setEtapaRecuperacao('sucesso');
+    } catch (falha) {
+      setErroRecuperacao(traduzirErroRecuperacao(falha));
+    } finally {
+      setEnviandoRecuperacao(false);
     }
   }
 
@@ -143,6 +221,182 @@ export function TelaAuth({ modo }: { modo: Modo }) {
               Cancelar
             </button>
           </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (mostrarRecuperacao) {
+    return (
+      <div
+        className="flex min-h-dvh flex-col justify-center px-0 md:px-6 pb-10"
+        style={{
+          background: 'linear-gradient(180deg, #3b4c5e 0%, #6c8496 100%)',
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 48px)',
+        }}
+      >
+        <div className="mx-auto w-full px-4 md:max-w-md md:p-8 md:bg-white/5 md:backdrop-blur-md md:border md:border-white/10 md:shadow-2xl md:rounded-2xl">
+          <div className="text-center">
+            <h1 className="text-3xl md:text-4xl font-extrabold text-white">
+              Dose Certa<span className="text-teal-400">-AI</span>
+            </h1>
+            <h2 className="text-xl md:text-2xl font-medium text-slate-300 mt-2">Recuperar senha</h2>
+            {etapaRecuperacao === 'email' ? (
+              <p className="t-body mt-3 text-slate-400">
+                Digite o e-mail da sua conta para receber um código de redefinição.
+              </p>
+            ) : null}
+            {etapaRecuperacao === 'codigo' ? (
+              <p className="t-body mt-3 text-slate-400">
+                Enviamos um código para <strong className="text-white">{emailRecuperacao}</strong>. Digite-o
+                abaixo junto com sua nova senha. Não encontrou? Verifique também a caixa de spam/lixo
+                eletrônico.
+              </p>
+            ) : null}
+          </div>
+
+          {etapaRecuperacao === 'sucesso' ? (
+            <div className="mt-8 space-y-4">
+              <p
+                className="t-label rounded-[14px] border border-white/20 bg-white/10 px-4 py-3 text-white backdrop-blur-md"
+                role="status"
+              >
+                Senha redefinida com sucesso. Você já pode entrar com a nova senha.
+              </p>
+              <button
+                type="button"
+                onClick={fecharRecuperacao}
+                className="w-full text-center text-sm text-slate-400 hover:text-white hover:underline"
+              >
+                Voltar ao login
+              </button>
+            </div>
+          ) : null}
+
+          {etapaRecuperacao === 'email' ? (
+            <form onSubmit={enviarCodigo} className="mt-8 space-y-4">
+              <div className="flex flex-col">
+                <label htmlFor="email-recuperacao" className="t-caption text-slate-300">
+                  E-mail
+                </label>
+                <input
+                  id="email-recuperacao"
+                  type="email"
+                  inputMode="email"
+                  required
+                  autoFocus
+                  value={emailRecuperacao}
+                  onChange={(e) => setEmailRecuperacao(e.target.value)}
+                  autoComplete="email"
+                  placeholder="voce@exemplo.com"
+                  className={`mt-1.5 block min-h-11 w-full rounded-[14px] border ${erroRecuperacao ? 'border-red-500' : 'border-white/20'} bg-white/5 px-4 t-body text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500`}
+                />
+                {erroRecuperacao ? <p className="t-label mt-1.5 text-red-500">{erroRecuperacao}</p> : null}
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={enviandoRecuperacao || !firebaseConfigurado}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-full px-6 transition-opacity hover:opacity-85 disabled:opacity-45 disabled:pointer-events-none bg-teal-600 hover:bg-teal-700 text-white font-bold h-12"
+                >
+                  {enviandoRecuperacao ? 'Enviando…' : 'Enviar código'}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={fecharRecuperacao}
+                className="w-full text-center text-sm text-slate-400 hover:text-white hover:underline"
+              >
+                Voltar ao login
+              </button>
+            </form>
+          ) : null}
+
+          {etapaRecuperacao === 'codigo' ? (
+            <form onSubmit={confirmarRedefinicao} className="mt-8 space-y-4">
+              <div className="flex flex-col">
+                <label htmlFor="codigo-recuperacao" className="t-caption text-slate-300">
+                  Código recebido
+                </label>
+                <input
+                  id="codigo-recuperacao"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  required
+                  autoFocus
+                  value={codigoRecuperacao}
+                  onChange={(e) => setCodigoRecuperacao(e.target.value.replace(/\D/g, ''))}
+                  placeholder="000000"
+                  className="mt-1.5 block min-h-11 w-full rounded-[14px] border border-white/20 bg-white/5 px-4 t-body tracking-[0.3em] text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500"
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label htmlFor="nova-senha-recuperacao" className="t-caption text-slate-300">
+                  Nova senha
+                </label>
+                <input
+                  id="nova-senha-recuperacao"
+                  type="password"
+                  required
+                  minLength={6}
+                  autoComplete="new-password"
+                  value={novaSenhaRecuperacao}
+                  onChange={(e) => setNovaSenhaRecuperacao(e.target.value)}
+                  placeholder="Mínimo de 6 caracteres"
+                  className="mt-1.5 block min-h-11 w-full rounded-[14px] border border-white/20 bg-white/5 px-4 t-body text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500"
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label htmlFor="confirmar-senha-recuperacao" className="t-caption text-slate-300">
+                  Confirmar nova senha
+                </label>
+                <input
+                  id="confirmar-senha-recuperacao"
+                  type="password"
+                  required
+                  minLength={6}
+                  autoComplete="new-password"
+                  value={confirmarSenhaRecuperacao}
+                  onChange={(e) => setConfirmarSenhaRecuperacao(e.target.value)}
+                  placeholder="••••••••"
+                  className={`mt-1.5 block min-h-11 w-full rounded-[14px] border ${erroRecuperacao ? 'border-red-500' : 'border-white/20'} bg-white/5 px-4 t-body text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500`}
+                />
+                {erroRecuperacao ? <p className="t-label mt-1.5 text-red-500">{erroRecuperacao}</p> : null}
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={enviandoRecuperacao || !firebaseConfigurado}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-full px-6 transition-opacity hover:opacity-85 disabled:opacity-45 disabled:pointer-events-none bg-teal-600 hover:bg-teal-700 text-white font-bold h-12"
+                >
+                  {enviandoRecuperacao ? 'Aguarde…' : 'Redefinir senha'}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void enviarCodigo()}
+                disabled={enviandoRecuperacao}
+                className="w-full text-center text-sm text-slate-400 hover:text-white hover:underline disabled:opacity-45"
+              >
+                Reenviar código
+              </button>
+
+              <button
+                type="button"
+                onClick={fecharRecuperacao}
+                className="w-full text-center text-sm text-slate-400 hover:text-white hover:underline"
+              >
+                Voltar ao login
+              </button>
+            </form>
+          ) : null}
         </div>
       </div>
     );
@@ -260,17 +514,44 @@ export function TelaAuth({ modo }: { modo: Modo }) {
             ) : null}
             {!criando ? (
               <div className="flex justify-end mt-2">
-                <Link to="/recuperar-senha" className="text-sm text-slate-400 hover:text-white hover:underline">
+                <button
+                  type="button"
+                  onClick={() => setMostrarRecuperacao(true)}
+                  className="text-sm text-slate-400 hover:text-white hover:underline"
+                >
                   Esqueci minha senha?
-                </Link>
+                </button>
               </div>
             ) : null}
           </div>
 
+          {criando ? (
+            <label className="flex items-start gap-2 t-label text-slate-300">
+              <input
+                type="checkbox"
+                checked={aceitouTermos}
+                onChange={(e) => setAceitouTermos(e.target.checked)}
+                required
+                className="mt-0.5 size-4 accent-teal-600"
+              />
+              <span>
+                Li e concordo com os{' '}
+                <Link to="/termos" target="_blank" rel="noopener noreferrer" className="text-white underline">
+                  Termos de Uso
+                </Link>{' '}
+                e a{' '}
+                <Link to="/privacidade" target="_blank" rel="noopener noreferrer" className="text-white underline">
+                  Política de Privacidade
+                </Link>
+                , incluindo o processamento dos meus dados para fins de acompanhamento.
+              </span>
+            </label>
+          ) : null}
+
           <div className="pt-2">
             <button
               type="submit"
-              disabled={enviando || !firebaseConfigurado}
+              disabled={enviando || !firebaseConfigurado || (criando && !aceitouTermos)}
               className="w-full inline-flex items-center justify-center gap-2 rounded-full px-6 transition-opacity hover:opacity-85 disabled:opacity-45 disabled:pointer-events-none bg-teal-600 hover:bg-teal-700 text-white font-bold h-12"
             >
               {enviando ? 'Aguarde…' : criando ? 'Criar conta' : 'Entrar'}

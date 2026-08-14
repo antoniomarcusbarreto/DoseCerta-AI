@@ -8,6 +8,14 @@ import mammoth from 'mammoth';
 initializeApp();
 
 export { chatCopiloto } from './chat.js';
+export {
+  testarNotificacao,
+  lembreteAplicacao,
+  acompanhamentoSintoma,
+  engajamentoRotina,
+} from './notificacoes.js';
+export { excluirContaUsuario } from './conta.js';
+export { enviarCodigoRecuperacao, redefinirSenhaComCodigo } from './recuperacaoSenha.js';
 
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const geminiModel = defineString('GEMINI_MODEL', { default: 'gemini-flash-latest' });

@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { getFunctions, type Functions } from 'firebase/functions';
 import { getStorage, type FirebaseStorage } from 'firebase/storage';
+import { getMessaging, isSupported as mensagensSuportadas, type Messaging } from 'firebase/messaging';
 
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -65,6 +66,19 @@ export function getFunctionsCliente(): Functions {
 export function getStorageCliente(): FirebaseStorage {
   if (!storage) storage = getStorage(garantirApp());
   return storage;
+}
+
+let messaging: Messaging | null = null;
+
+/**
+ * `null` quando o navegador não suporta Push API (Safari antigo, iOS fora do
+ * modo instalado, contexto não-seguro) — `getMessaging` lançaria nesses casos.
+ */
+export async function getMessagingCliente(): Promise<Messaging | null> {
+  if (messaging) return messaging;
+  if (!(await mensagensSuportadas())) return null;
+  messaging = getMessaging(garantirApp());
+  return messaging;
 }
 
 let googleProvider: GoogleAuthProvider | null = null;

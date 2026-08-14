@@ -6,7 +6,11 @@ import { DadosProvider } from '@/features/dados/DadosProvider';
 import { ThemeProvider } from '@/features/theme/ThemeProvider';
 import { TelaHistorico } from '@/features/aplicacao/TelaHistorico';
 import { TelaMedicamentos } from '@/features/medicamento/TelaMedicamentos';
+import { TelaLembretes } from '@/features/notificacoes/TelaLembretes';
+import { TelaMeusDados } from '@/features/conta/TelaMeusDados';
 import { TelaTratamento } from '@/features/protocolo/TelaTratamento';
+import { TelaTermos } from '@/features/legal/TelaTermos';
+import { TelaPrivacidade } from '@/features/legal/TelaPrivacidade';
 import { AuthGate } from './AuthGate';
 import { Home } from './Home';
 import { KitchenSink } from './KitchenSink';
@@ -32,6 +36,8 @@ export function App() {
           <Routes>
             <Route path="/entrar" element={<TelaAuth modo="entrar" />} />
             <Route path="/criar-conta" element={<TelaAuth modo="criar" />} />
+            <Route path="/termos" element={<TelaTermos />} />
+            <Route path="/privacidade" element={<TelaPrivacidade />} />
 
             {/* Vitrine do design system: aberta, sem depender de sessão. */}
             <Route path="/kitchen-sink" element={<KitchenSink />} />
@@ -75,6 +81,8 @@ export function App() {
               <Route path="/ajustes/tratamento" element={<TelaTratamento />} />
               <Route path="/ajustes/medicamentos" element={<TelaMedicamentos />} />
               <Route path="/ajustes/suporte" element={<TelaSuporte />} />
+              <Route path="/ajustes/lembretes" element={<TelaLembretes />} />
+              <Route path="/ajustes/meus-dados" element={<TelaMeusDados />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />
