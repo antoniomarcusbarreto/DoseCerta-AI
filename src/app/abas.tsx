@@ -37,7 +37,7 @@ export const ABAS: Aba[] = [
   },
   {
     para: '/historico',
-    rotulo: 'Histórico',
+    rotulo: 'Aplicações',
     icone: (
       <svg viewBox="0 0 24 24" className="size-6" aria-hidden="true">
         <path d="M4 6h16M4 12h16M4 18h10" {...traco} />

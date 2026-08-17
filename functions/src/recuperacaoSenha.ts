@@ -5,8 +5,8 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 
 const REGIAO = 'southamerica-east1';
-const REMETENTE = 'Dose Certa-AI <suporte@notificacoes.dosecerta-ai.com>';
-const RESPONDER_PARA = 'suporte@dosecerta-ai.com';
+const REMETENTE = 'Dose Certa-AI <suporte@notificacoes.codehatch.com.br>';
+const RESPONDER_PARA = 'suporte@codehatch.com.br';
 const COOLDOWN_MS = 60 * 1000;
 const EXPIRACAO_MS = 10 * 60 * 1000;
 const EXPIRACAO_MINUTOS = EXPIRACAO_MS / 60_000;

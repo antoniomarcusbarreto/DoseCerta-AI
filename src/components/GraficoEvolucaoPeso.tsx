@@ -17,6 +17,8 @@ import type { Aplicacao, RegistroPeso } from "@/domain/tipos";
 export type PontoEvolucaoPeso = {
   data: string;
   peso: number;
+  /** `true` quando este dia não tem peso registrado e o valor é o último peso conhecido, carregado adiante só para o marcador de aplicação ter onde pousar. */
+  pesoEstimado: boolean;
   teveInjecao: boolean;
 };
 
@@ -29,21 +31,53 @@ function chaveDoDia(data: Date): string {
   return `${data.getFullYear()}-${data.getMonth()}-${data.getDate()}`;
 }
 
+/**
+ * Uma aplicação sem peso registrado no mesmo dia não gerava nenhum ponto no
+ * gráfico antes — o eixo só continha os dias de `historico`. Por isso o
+ * marcador de dose "sumia" sempre que o usuário registrava a aplicação num
+ * dia sem pesagem. Aqui o eixo passa a ser a união dos dois calendários: dias
+ * com peso e dias com dose aplicada. Um dia de dose sem peso próprio herda o
+ * último peso conhecido (`pesoEstimado: true`) só para ter uma posição no
+ * eixo Y — o tooltip deixa claro que aquele valor não é uma pesagem real.
+ */
 function montarDadosGrafico(
   historico: RegistroPeso[],
   aplicacoes: Aplicacao[],
 ): PontoEvolucaoPeso[] {
-  const diasComDose = new Set(
-    aplicacoes.filter((a) => a.status === "aplicada").map((a) => chaveDoDia(a.dataHora)),
-  );
+  const pesoPorDia = new Map<string, { data: Date; peso: number }>();
+  for (const registro of historico) {
+    pesoPorDia.set(chaveDoDia(registro.recordedAt), { data: registro.recordedAt, peso: registro.weight });
+  }
 
-  return [...historico]
-    .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime())
-    .map((registro) => ({
-      data: registro.recordedAt.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
-      peso: registro.weight,
-      teveInjecao: diasComDose.has(chaveDoDia(registro.recordedAt)),
-    }));
+  const doseDoDia = new Map<string, Date>();
+  for (const aplicacao of aplicacoes) {
+    if (aplicacao.status !== "aplicada") continue;
+    const chave = chaveDoDia(aplicacao.dataHora);
+    if (!doseDoDia.has(chave)) doseDoDia.set(chave, aplicacao.dataHora);
+  }
+
+  const chaves = new Set<string>([...pesoPorDia.keys(), ...doseDoDia.keys()]);
+  const diasOrdenados = [...chaves]
+    .map((chave) => pesoPorDia.get(chave)?.data ?? doseDoDia.get(chave)!)
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  let ultimoPesoConhecido: number | null = null;
+  const pontos: PontoEvolucaoPeso[] = [];
+  for (const dia of diasOrdenados) {
+    const chave = chaveDoDia(dia);
+    const registroPeso = pesoPorDia.get(chave);
+    if (registroPeso) ultimoPesoConhecido = registroPeso.peso;
+    // Dose aplicada antes de qualquer peso registrado: não há valor para plotar ainda.
+    if (ultimoPesoConhecido === null) continue;
+
+    pontos.push({
+      data: dia.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
+      peso: ultimoPesoConhecido,
+      pesoEstimado: !registroPeso,
+      teveInjecao: doseDoDia.has(chave),
+    });
+  }
+  return pontos;
 }
 
 type PontoDoGrafico = {
@@ -56,25 +90,26 @@ function DotInjecao({ cx, cy, payload }: PontoDoGrafico) {
   if (cx === undefined || cy === undefined || !payload) return null;
 
   if (payload.teveInjecao) {
-    return (
-      <circle
-        cx={cx}
-        cy={cy}
-        r={6}
-        fill={COR_INJECAO}
-        stroke="#fff"
-        strokeWidth={1.5}
-      />
+    // Peso estimado (carregado do último registro real): círculo oco, para não
+    // parecer uma pesagem que não aconteceu nesse dia.
+    return payload.pesoEstimado ? (
+      <circle cx={cx} cy={cy} r={6} fill="none" stroke={COR_INJECAO} strokeWidth={2} strokeDasharray="2 2" />
+    ) : (
+      <circle cx={cx} cy={cy} r={6} fill={COR_INJECAO} stroke="#fff" strokeWidth={1.5} />
     );
   }
 
   return <circle cx={cx} cy={cy} r={3} fill={COR_LINHA} />;
 }
 
-function TooltipEvolucao({ active, payload, label }: TooltipContentProps<ValueType, NameType>) {
+function TooltipEvolucao({ active, payload, label, labelFormatter }: TooltipContentProps<ValueType, NameType>) {
   if (!active || !payload || payload.length === 0) return null;
 
   const ponto = payload[0].payload as PontoEvolucaoPeso;
+  // `label` já vem só como DD/MM (ver `montarDadosGrafico`) — nunca hora. O
+  // `labelFormatter` passado ao <Tooltip/> é aplicado aqui mesmo assim, como
+  // garantia: qualquer formatação futura do rótulo passa por um único lugar.
+  const rotulo = typeof labelFormatter === "function" ? labelFormatter(label, payload) : label;
 
   return (
     <div
@@ -88,8 +123,8 @@ function TooltipEvolucao({ active, payload, label }: TooltipContentProps<ValueTy
         boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
       }}
     >
-      <div style={{ color: COR_EIXO, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontWeight: 600 }}>Peso: {ponto.peso} kg</div>
+      <div style={{ color: COR_EIXO, marginBottom: 4 }}>{rotulo}</div>
+      <div style={{ fontWeight: 600 }}>Peso: {ponto.peso.toLocaleString("pt-BR")} kg</div>
       {ponto.teveInjecao && (
         <div
           style={{
@@ -103,7 +138,7 @@ function TooltipEvolucao({ active, payload, label }: TooltipContentProps<ValueTy
             fontWeight: 600,
           }}
         >
-          💉 Dia da Dose
+          Aplicação
         </div>
       )}
     </div>
@@ -154,7 +189,7 @@ export function GraficoEvolucaoPeso({ dados }: GraficoEvolucaoPesoProps) {
 
   return (
     <ResponsiveContainer width="100%" height={300}>
-      <LineChart data={dadosGrafico} margin={{ top: 12, right: 10, bottom: 8, left: -20 }}>
+      <LineChart data={dadosGrafico} margin={{ top: 12, right: 10, bottom: 8, left: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={COR_GRADE} vertical={false} />
         <XAxis
           dataKey="data"
@@ -167,14 +202,21 @@ export function GraficoEvolucaoPeso({ dados }: GraficoEvolucaoPesoProps) {
           textAnchor="end"
           height={40}
         />
+        {/* `width` explícito: sem ele o eixo usa a largura padrão do Recharts,
+            que corta o primeiro dígito de pesos de 3 dígitos (ex.: "109.25"
+            virava "09.25" — lido por engano como hora). */}
         <YAxis
+          width={50}
           stroke={COR_EIXO}
           tick={{ fill: COR_EIXO, fontSize: 12 }}
           axisLine={{ stroke: COR_GRADE }}
           tickLine={false}
           domain={["dataMin - 2", "dataMax + 2"]}
         />
-        <Tooltip content={TooltipEvolucao} />
+        {/* `data` já é montada como DD/MM (ver `montarDadosGrafico`); o
+            formatter aqui garante que nenhum outro formato (com hora) escape
+            para o tooltip, mesmo que a origem do rótulo mude no futuro. */}
+        <Tooltip content={TooltipEvolucao} labelFormatter={(rotulo: string) => rotulo.slice(0, 5)} />
         <Line
           type="monotone"
           dataKey="peso"

@@ -25,7 +25,13 @@ const EXTENSOES_ACEITAS_IA = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
 
-type RespostaImportarDietaIA = { title: string; meals: Refeicao[] };
+type RespostaImportarDietaIA = {
+  title: string;
+  meals: Refeicao[];
+  proteinGoalG: number;
+  kcalGoal: number;
+  waterGoalMl: number;
+};
 
 function arquivoParaBase64(arquivo: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -67,10 +73,20 @@ export function TelaDieta() {
   const [titulo, setTitulo] = useState('');
   const [ativarPlano, setAtivarPlano] = useState(true);
   const [refeicoes, setRefeicoes] = useState<Refeicao[]>([novaRefeicaoVazia()]);
+  const [proteinGoalG, setProteinGoalG] = useState('');
+  const [kcalGoal, setKcalGoal] = useState('');
+  const [waterGoalMl, setWaterGoalMl] = useState('');
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [arquivoIA, setArquivoIA] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [excluindoAtivo, setExcluindoAtivo] = useState(false);
+  const [erroExclusaoAtivo, setErroExclusaoAtivo] = useState<string | null>(null);
+
+  const [editandoMetas, setEditandoMetas] = useState(false);
+  const [metasEmEdicao, setMetasEmEdicao] = useState({ proteinGoalG: '', kcalGoal: '', waterGoalMl: '' });
+  const [salvandoMetas, setSalvandoMetas] = useState(false);
+  const [erroMetas, setErroMetas] = useState<string | null>(null);
 
   const [editandoRefeicaoId, setEditandoRefeicaoId] = useState<string | null>(null);
   const [refeicaoEmEdicao, setRefeicaoEmEdicao] = useState<Refeicao | null>(null);
@@ -100,6 +116,9 @@ export function TelaDieta() {
     setTitulo('');
     setAtivarPlano(true);
     setRefeicoes([novaRefeicaoVazia()]);
+    setProteinGoalG('');
+    setKcalGoal('');
+    setWaterGoalMl('');
     setArquivoIA(null);
   }
 
@@ -126,6 +145,9 @@ export function TelaDieta() {
 
       setTitulo(extraido.title);
       setRefeicoes(extraido.meals.map((refeicao) => ({ ...refeicao, id: crypto.randomUUID() })));
+      if (extraido.proteinGoalG) setProteinGoalG(String(extraido.proteinGoalG));
+      if (extraido.kcalGoal) setKcalGoal(String(extraido.kcalGoal));
+      if (extraido.waterGoalMl) setWaterGoalMl(String(extraido.waterGoalMl));
     } catch (falha) {
       console.error('[DoseCerta] falha ao importar dieta via IA', falha);
       setErro('Não foi possível importar o arquivo. Tente novamente ou preencha manualmente.');
@@ -155,6 +177,9 @@ export function TelaDieta() {
         title: titulo.trim(),
         isActive: ativarPlano,
         meals: refeicoesValidas,
+        proteinGoalG: Number(proteinGoalG.replace(',', '.')) || 0,
+        kcalGoal: Number(kcalGoal.replace(',', '.')) || 0,
+        waterGoalMl: Number(waterGoalMl.replace(',', '.')) || 0,
       });
       resetarForm();
       setIsCreatingPlan(false);
@@ -166,13 +191,20 @@ export function TelaDieta() {
     }
   }
 
-  async function excluir(planoId: string) {
+  async function excluir(planoId: string, ehAtivo = false) {
     if (!uid) return;
+    if (ehAtivo) {
+      setErroExclusaoAtivo(null);
+      setExcluindoAtivo(true);
+    }
     try {
       await excluirPlanoAlimentar(uid, planoId);
     } catch (falha) {
       console.error('[DoseCerta] falha ao excluir plano alimentar', falha);
-      setErro('Não foi possível excluir o plano. Tente novamente.');
+      if (ehAtivo) setErroExclusaoAtivo('Não foi possível excluir o plano. Tente novamente.');
+      else setErro('Não foi possível excluir o plano. Tente novamente.');
+    } finally {
+      if (ehAtivo) setExcluindoAtivo(false);
     }
   }
 
@@ -189,6 +221,36 @@ export function TelaDieta() {
       setErroRefeicoes('Não foi possível remover a refeição. Tente novamente.');
     } finally {
       setSalvandoRefeicaoId(null);
+    }
+  }
+
+  function iniciarEdicaoMetas() {
+    if (!planoAtivo) return;
+    setErroMetas(null);
+    setMetasEmEdicao({
+      proteinGoalG: planoAtivo.proteinGoalG ? String(planoAtivo.proteinGoalG) : '',
+      kcalGoal: planoAtivo.kcalGoal ? String(planoAtivo.kcalGoal) : '',
+      waterGoalMl: planoAtivo.waterGoalMl ? String(planoAtivo.waterGoalMl) : '',
+    });
+    setEditandoMetas(true);
+  }
+
+  async function salvarMetas() {
+    if (!uid || !planoAtivo) return;
+    setErroMetas(null);
+    setSalvandoMetas(true);
+    try {
+      await atualizarPlanoAlimentar(uid, planoAtivo.id, {
+        proteinGoalG: Number(metasEmEdicao.proteinGoalG.replace(',', '.')) || 0,
+        kcalGoal: Number(metasEmEdicao.kcalGoal.replace(',', '.')) || 0,
+        waterGoalMl: Number(metasEmEdicao.waterGoalMl.replace(',', '.')) || 0,
+      });
+      setEditandoMetas(false);
+    } catch (falha) {
+      console.error('[DoseCerta] falha ao salvar metas do plano', falha);
+      setErroMetas('Não foi possível salvar as metas. Tente novamente.');
+    } finally {
+      setSalvandoMetas(false);
     }
   }
 
@@ -276,7 +338,89 @@ export function TelaDieta() {
           <p className="t-label text-ink-muted">Carregando…</p>
         ) : planoAtivo ? (
           <div className="flex flex-col gap-3">
-            <p className="t-title text-ink">{planoAtivo.title}</p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="t-title text-ink">{planoAtivo.title}</p>
+              <Button
+                type="button"
+                variante="fantasma"
+                disabled={excluindoAtivo}
+                onClick={() => excluir(planoAtivo.id, true)}
+              >
+                {excluindoAtivo ? 'Excluindo…' : 'Excluir plano'}
+              </Button>
+            </div>
+
+            {erroExclusaoAtivo ? <Alerta tom="danger" titulo={erroExclusaoAtivo} /> : null}
+
+            <div
+              className="flex flex-col gap-3 border p-3"
+              style={{ borderColor: 'var(--border-hair)', borderRadius: 'var(--r-field)' }}
+            >
+              {editandoMetas ? (
+                <>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Field
+                      rotulo="Proteína (g)"
+                      type="number"
+                      inputMode="decimal"
+                      value={metasEmEdicao.proteinGoalG}
+                      onChange={(e) =>
+                        setMetasEmEdicao({ ...metasEmEdicao, proteinGoalG: e.target.value })
+                      }
+                    />
+                    <Field
+                      rotulo="Calorias (kcal)"
+                      type="number"
+                      inputMode="decimal"
+                      value={metasEmEdicao.kcalGoal}
+                      onChange={(e) => setMetasEmEdicao({ ...metasEmEdicao, kcalGoal: e.target.value })}
+                    />
+                    <Field
+                      rotulo="Água (ml)"
+                      type="number"
+                      inputMode="decimal"
+                      value={metasEmEdicao.waterGoalMl}
+                      onChange={(e) =>
+                        setMetasEmEdicao({ ...metasEmEdicao, waterGoalMl: e.target.value })
+                      }
+                    />
+                  </div>
+                  {erroMetas ? <Alerta tom="danger" titulo={erroMetas} /> : null}
+                  <div className="flex gap-2">
+                    <Button type="button" onClick={salvarMetas} disabled={salvandoMetas}>
+                      {salvandoMetas ? 'Salvando…' : 'Salvar metas'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variante="fantasma"
+                      onClick={() => setEditandoMetas(false)}
+                      disabled={salvandoMetas}
+                    >
+                      Cancelar
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="t-caption text-ink-muted">Metas diárias deste plano</p>
+                  <div className="flex flex-wrap gap-x-6 gap-y-1">
+                    <p className="t-label text-ink">
+                      Proteína: {planoAtivo.proteinGoalG ? `${planoAtivo.proteinGoalG}g` : 'Não definida'}
+                    </p>
+                    <p className="t-label text-ink">
+                      Calorias: {planoAtivo.kcalGoal ? `${planoAtivo.kcalGoal} kcal` : 'Não definida'}
+                    </p>
+                    <p className="t-label text-ink">
+                      Água: {planoAtivo.waterGoalMl ? `${planoAtivo.waterGoalMl}ml` : 'Não definida'}
+                    </p>
+                  </div>
+                  <Button type="button" variante="secundaria" className="self-start" onClick={iniciarEdicaoMetas}>
+                    Editar metas
+                  </Button>
+                </>
+              )}
+            </div>
+
             <ul className="divide-y" style={{ borderColor: 'var(--border-hair)' }}>
               {ordenarRefeicoesPorDiaEHorario(planoAtivo.meals).map((refeicao) =>
                 editandoRefeicaoId === refeicao.id && refeicaoEmEdicao ? (
@@ -408,30 +552,82 @@ export function TelaDieta() {
         <SheetCard titulo="Novo plano">
           <form onSubmit={salvar} className="flex flex-col gap-4">
             <div
-              className="flex flex-col gap-2 border p-3"
+              className="flex flex-col gap-3 border p-3"
               style={{ borderColor: 'var(--border-hair)', borderRadius: 'var(--r-field)' }}
             >
-              <p className="t-caption text-ink-muted">Importar Dieta (IA)</p>
-              <div className="flex flex-wrap items-center gap-3">
+              <div>
+                <p className="t-caption text-ink-muted">Importar Dieta (IA)</p>
+                <p className="t-label mt-1 text-ink-muted">
+                  Envie o PDF ou DOCX do seu nutricionista e a IA preenche o plano abaixo automaticamente.
+                </p>
+              </div>
+
+              <label
+                className="inline-flex min-h-11 w-fit cursor-pointer items-center justify-center gap-2 self-start rounded-full px-6 t-label transition-opacity hover:opacity-85"
+                style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--border-hair)' }}
+              >
+                Escolher arquivo
                 <input
                   type="file"
                   accept=".pdf,.docx"
                   onChange={(e) => setArquivoIA(e.target.files?.[0] ?? null)}
                   disabled={isAnalyzing}
-                  className="t-label text-ink-muted"
+                  className="hidden"
                 />
-                <Button
-                  type="button"
-                  variante="secundaria"
-                  disabled={!arquivoIA || isAnalyzing}
-                  onClick={() => arquivoIA && handleAIImport(arquivoIA)}
-                >
-                  {isAnalyzing ? 'Analisando…' : 'Importar Dieta (IA)'}
-                </Button>
-              </div>
+              </label>
+
+              <p className="t-caption text-ink-muted">
+                {arquivoIA ? arquivoIA.name : 'Nenhum arquivo selecionado'}
+              </p>
+
+              <Button
+                type="button"
+                variante="secundaria"
+                className="self-start"
+                disabled={!arquivoIA || isAnalyzing}
+                onClick={() => arquivoIA && handleAIImport(arquivoIA)}
+              >
+                {isAnalyzing ? 'Analisando…' : 'Importar Dieta (IA)'}
+              </Button>
             </div>
 
             <Field rotulo="Nome do plano" value={titulo} onChange={(e) => setTitulo(e.target.value)} required />
+
+            <div className="flex flex-col gap-2">
+              <p className="t-caption text-ink-muted">
+                Metas diárias (os anéis da tela inicial usam estes valores)
+              </p>
+              <p className="t-label text-ink-muted">
+                Deixe em branco o que a IA não encontrou explícito no documento — ao salvar, o app calcula
+                automaticamente com base no seu peso cadastrado.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field
+                  rotulo="Proteína (g)"
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Calculado automaticamente"
+                  value={proteinGoalG}
+                  onChange={(e) => setProteinGoalG(e.target.value)}
+                />
+                <Field
+                  rotulo="Calorias (kcal)"
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Calculado automaticamente"
+                  value={kcalGoal}
+                  onChange={(e) => setKcalGoal(e.target.value)}
+                />
+                <Field
+                  rotulo="Água (ml)"
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Calculado automaticamente"
+                  value={waterGoalMl}
+                  onChange={(e) => setWaterGoalMl(e.target.value)}
+                />
+              </div>
+            </div>
 
             <label className="flex items-center gap-2 t-label text-ink">
               <input

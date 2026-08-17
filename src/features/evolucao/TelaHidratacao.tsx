@@ -8,11 +8,13 @@ import { Field } from '@/components/Field';
 import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
+import { calcularMetaHidratacao } from '@/domain/hidratacao';
 import { useDados } from '@/features/dados/DadosProvider';
 import {
   atualizarMetaHidratacao,
   consultaHidratacaoHoje,
   consultaHistoricoPeso,
+  consultaPlanosAlimentares,
   criarRegistroHidratacao,
   excluirRegistroHidratacao,
 } from '@/features/dados/repositorio';
@@ -32,10 +34,6 @@ const IconeVoltar = () => (
   </svg>
 );
 
-/** Usada só quando a conta não tem nenhum peso registrado ainda, para a tela não ficar sem meta nenhuma. */
-const META_PADRAO_ML = 2000;
-const ML_POR_KG = 35;
-
 export function TelaHidratacao() {
   const navegar = useNavigate();
   const { uid } = useDados();
@@ -48,6 +46,10 @@ export function TelaHidratacao() {
     consulta,
     uid ? `${uid}/hydration_logs/hoje` : null,
   );
+
+  const consultaPlanos = uid ? consultaPlanosAlimentares(uid) : null;
+  const { dados: planos } = useColecao(consultaPlanos, uid ? `${uid}/diet_plans` : null);
+  const planoAtivo = planos.find((p) => p.isActive) ?? null;
 
   const meta = usuario?.hydration_goal ?? null;
 
@@ -68,13 +70,30 @@ export function TelaHidratacao() {
       try {
         const ultimoPeso = await getDocs(consultaHistoricoPeso(uid, 1));
         const peso = ultimoPeso.docs[0]?.data().weight ?? null;
-        const metaSugerida = peso ? Math.round(peso * ML_POR_KG) : META_PADRAO_ML;
-        await atualizarMetaHidratacao(uid, metaSugerida);
+        const metaSugerida = calcularMetaHidratacao(peso);
+        await atualizarMetaHidratacao(uid, metaSugerida, false);
       } catch (falha) {
         console.error('[DoseCerta] falha ao calcular meta de hidratação', falha);
       }
     })();
   }, [uid, carregandoMeta, meta]);
+
+  // Auto-cura: se o plano alimentar ativo tem uma meta de água diferente da
+  // que está gravada aqui (ex.: plano criado/editado antes desta sincronia
+  // existir, ou qualquer outro caso em que a escrita em `criarPlanoAlimentar`/
+  // `atualizarPlanoAlimentar` não tenha alcançado este documento), realinha
+  // ao abrir a tela — a meta do plano é sempre a que prevalece.
+  const metaSincronizada = useRef<number | null>(null);
+  useEffect(() => {
+    const metaDoPlano = planoAtivo?.waterGoalMl ?? 0;
+    if (!uid || metaDoPlano <= 0 || meta === metaDoPlano) return;
+    if (metaSincronizada.current === metaDoPlano) return;
+    metaSincronizada.current = metaDoPlano;
+
+    atualizarMetaHidratacao(uid, metaDoPlano, true).catch((falha) => {
+      console.error('[DoseCerta] falha ao sincronizar meta de hidratação com o plano ativo', falha);
+    });
+  }, [uid, planoAtivo?.waterGoalMl, meta]);
 
   if (!uid) return null;
 
@@ -124,7 +143,7 @@ export function TelaHidratacao() {
     setErro(null);
     setSalvandoMeta(true);
     try {
-      await atualizarMetaHidratacao(uid, Math.round(novaMeta));
+      await atualizarMetaHidratacao(uid, Math.round(novaMeta), true);
       setMetaEmEdicao('');
     } catch (falha) {
       console.error('[DoseCerta] falha ao salvar meta de hidratação', falha);

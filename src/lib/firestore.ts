@@ -20,6 +20,7 @@ import type {
   MensagemCopiloto,
   Medicamento,
   Medida,
+  MetasNutricionais,
   Perfil,
   PlanoAlimentar,
   Protocolo,
@@ -262,12 +263,19 @@ export const conversorPlanoAlimentar = converter<PlanoAlimentar>(
     title: String(d.title ?? ''),
     isActive: Boolean(d.isActive),
     meals: Array.isArray(d.meals) ? d.meals : [],
+    // Planos criados antes desses campos existirem não têm meta — 0 é "não definida".
+    proteinGoalG: Number(d.proteinGoalG ?? 0),
+    kcalGoal: Number(d.kcalGoal ?? 0),
+    waterGoalMl: Number(d.waterGoalMl ?? 0),
     createdAt: paraData(d.createdAt) ?? new Date(),
   }),
   (p) => ({
     title: p.title,
     isActive: p.isActive,
     meals: p.meals,
+    proteinGoalG: p.proteinGoalG,
+    kcalGoal: p.kcalGoal,
+    waterGoalMl: p.waterGoalMl,
     createdAt: paraTimestamp(p.createdAt),
   }),
 ) as FirestoreDataConverter<PlanoAlimentar, DocumentData>;
@@ -392,7 +400,12 @@ export const conversorRegistroRefeicao = converter<RegistroRefeicao>(
 
 const docUsuario = (uid: string): DocumentReference<DocumentData> => doc(getDb(), 'users', uid);
 
-type CampoUsuario = { height: number | null; hydration_goal: number | null };
+type CampoUsuario = {
+  height: number | null;
+  hydration_goal: number | null;
+  metaEditadaManualmente: boolean;
+  nutritionGoals: MetasNutricionais | null;
+};
 
 const conversorCampoUsuario: FirestoreDataConverter<CampoUsuario, DocumentData> = {
   // Escritas aqui são sempre parciais (merge de um campo por vez), então só
@@ -402,12 +415,32 @@ const conversorCampoUsuario: FirestoreDataConverter<CampoUsuario, DocumentData> 
     const dados: DocumentData = {};
     if (u.height !== undefined) dados.height = u.height;
     if (u.hydration_goal !== undefined) dados.hydration_goal = u.hydration_goal;
+    if (u.metaEditadaManualmente !== undefined) dados.metaEditadaManualmente = u.metaEditadaManualmente;
+    if (u.nutritionGoals !== undefined) {
+      const metas = u.nutritionGoals as MetasNutricionais | null;
+      dados.nutritionGoals = metas ? { ...metas, generatedAt: paraTimestamp(metas.generatedAt) } : null;
+    }
     return dados;
   },
-  fromFirestore: (snap) => ({
-    height: snap.data().height ?? null,
-    hydration_goal: snap.data().hydration_goal ?? null,
-  }),
+  fromFirestore: (snap) => {
+    const d = snap.data();
+    return {
+      height: d.height ?? null,
+      hydration_goal: d.hydration_goal ?? null,
+      // Contas antigas não têm o campo ainda: ausência = geração automática.
+      metaEditadaManualmente: Boolean(d.metaEditadaManualmente ?? false),
+      nutritionGoals: d.nutritionGoals
+        ? {
+            proteinGoalG: Number(d.nutritionGoals.proteinGoalG ?? 0),
+            fiberGoalG: Number(d.nutritionGoals.fiberGoalG ?? 0),
+            kcalFloor: Number(d.nutritionGoals.kcalFloor ?? 0),
+            suggestedMenu: String(d.nutritionGoals.suggestedMenu ?? ''),
+            disclaimer: String(d.nutritionGoals.disclaimer ?? ''),
+            generatedAt: paraData(d.nutritionGoals.generatedAt) ?? new Date(),
+          }
+        : null,
+    };
+  },
 };
 
 /** Doc raiz do usuário, só para o campo `height` — `docUsuario` acima fica sem converter porque também serve de pai para as subcoleções. */

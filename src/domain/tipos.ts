@@ -245,7 +245,21 @@ export type PlanoAlimentar = {
   title: string;
   isActive: boolean;
   meals: Refeicao[];
+  /** Metas diárias do plano. `0` = meta não definida (plano legado ou sem essa informação). */
+  proteinGoalG: number;
+  kcalGoal: number;
+  waterGoalMl: number;
   createdAt: Date;
+};
+
+/** Metas nutricionais provisórias, geradas por IA quando não há plano de nutricionista. */
+export type MetasNutricionais = {
+  proteinGoalG: number;
+  fiberGoalG: number;
+  kcalFloor: number;
+  suggestedMenu: string;
+  disclaimer: string;
+  generatedAt: Date;
 };
 
 export type PapelMensagemCopiloto = 'user' | 'assistant';

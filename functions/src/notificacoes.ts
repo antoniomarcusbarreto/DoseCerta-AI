@@ -1,4 +1,4 @@
-import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp, type QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
@@ -151,6 +151,92 @@ export const acompanhamentoSintoma = onSchedule(
         uid,
         'Como você está hoje?',
         'Ontem você relatou desconforto. Seu Co-piloto tem dicas para te ajudar.',
+      );
+    }
+  },
+);
+
+const ML_POR_KG_PESO = 35;
+const META_HIDRATACAO_PADRAO_ML = 2000;
+
+/**
+ * Mesma regra de `src/domain/hidratacao.ts` (peso×35ml, com fallback fixo) —
+ * duplicada aqui porque `functions/` é outro pacote e não importa `src/`.
+ */
+async function metaHidratacaoDoUsuario(usuario: QueryDocumentSnapshot): Promise<number> {
+  const hydrationGoal = usuario.data().hydration_goal;
+  if (typeof hydrationGoal === 'number' && hydrationGoal > 0) return hydrationGoal;
+
+  const ultimoPeso = await usuario.ref
+    .collection('weight_history')
+    .orderBy('recordedAt', 'desc')
+    .limit(1)
+    .get();
+
+  const pesoKg = ultimoPeso.empty ? null : (ultimoPeso.docs[0].data().weight as number | undefined);
+  return pesoKg ? Math.round(pesoKg * ML_POR_KG_PESO) : META_HIDRATACAO_PADRAO_ML;
+}
+
+/** Soma `amount_ml` de `hydration_logs` registrados hoje. */
+async function totalHidratacaoHoje(userRef: FirebaseFirestore.DocumentReference): Promise<number> {
+  const agora = new Date();
+  const inicio = Timestamp.fromDate(inicioDoDia(agora));
+  const fim = Timestamp.fromDate(fimDoDia(agora));
+
+  const snap = await userRef
+    .collection('hydration_logs')
+    .where('recordedAt', '>=', inicio)
+    .where('recordedAt', '<=', fim)
+    .get();
+
+  return snap.docs.reduce((total, doc) => total + Number(doc.data().amount_ml ?? 0), 0);
+}
+
+/**
+ * Diariamente às 15:00: quem bebeu menos de 50% da meta até agora recebe um
+ * empurrão. Não dispara para quem já bateu a meta (condição `< 50%` já cobre).
+ */
+export const hidratacaoMetadeDia = onSchedule(
+  { schedule: '0 15 * * *', timeZone: FUSO, region: REGIAO },
+  async () => {
+    const db = getFirestore();
+    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+
+    for (const usuario of usuarios.docs) {
+      const meta = await metaHidratacaoDoUsuario(usuario);
+      const total = await totalHidratacaoHoje(usuario.ref);
+      if (total >= meta * 0.5) continue;
+
+      await enviarParaUsuario(
+        usuario.id,
+        '💧 Hora de beber água',
+        'Opa! Já passou do meio-dia e você bebeu pouca água. Que tal um copo agora?',
+      );
+    }
+  },
+);
+
+/**
+ * Diariamente às 19:00: quem está entre 50% e 100% da meta recebe um
+ * incentivo com a quantidade exata que falta. Quem já bateu a meta (>=100%)
+ * ou está abaixo de 50% (já coberto pelo aviso das 15h) não recebe nada.
+ */
+export const hidratacaoRetaFinal = onSchedule(
+  { schedule: '0 19 * * *', timeZone: FUSO, region: REGIAO },
+  async () => {
+    const db = getFirestore();
+    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+
+    for (const usuario of usuarios.docs) {
+      const meta = await metaHidratacaoDoUsuario(usuario);
+      const total = await totalHidratacaoHoje(usuario.ref);
+      if (total < meta * 0.5 || total >= meta) continue;
+
+      const faltam = meta - total;
+      await enviarParaUsuario(
+        usuario.id,
+        '🏆 Quase lá!',
+        `Faltam só ${faltam} ml para bater sua meta de hidratação hoje!`,
       );
     }
   },

@@ -13,7 +13,8 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, ref as refStorage, uploadBytes } from 'firebase/storage';
-import { getDb, getStorageCliente } from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getDb, getFunctionsCliente, getStorageCliente } from '@/lib/firebase';
 import {
   colAplicacoes,
   colBowelLogs,
@@ -35,12 +36,14 @@ import {
 } from '@/lib/firestore';
 import { proximaAplicacao } from '@/domain/aplicacao';
 import { CATALOGO_VERSAO, entradasPendentes, paraMedicamento } from '@/domain/catalogo';
-import { macrosProporcionais } from '@/domain/refeicao';
+import { calcularMetaHidratacao } from '@/domain/hidratacao';
+import { calcularMetaCalorica, calcularMetaProteina, macrosProporcionais } from '@/domain/refeicao';
 import type {
   AnguloFoto,
   Aplicacao,
   MacrosRefeicao,
   Medicamento,
+  MetasNutricionais,
   Perfil,
   PlanoAlimentar,
   Protocolo,
@@ -275,8 +278,44 @@ export async function excluirRegistroHidratacao(uid: string, registroId: string)
   await deleteDoc(doc(colHidratacao(uid), registroId));
 }
 
-export async function atualizarMetaHidratacao(uid: string, hydration_goal: number): Promise<void> {
-  await setDoc(refUsuario(uid), { hydration_goal }, { merge: true });
+/**
+ * `editadaManualmente` precisa ser sempre explícito: geração automática (a
+ * partir do peso) grava `false`; edição pela pessoa ou aceite de uma
+ * recalculação sugerida gravam `true`/`false` conforme o caso, nunca fica
+ * implícito no call site.
+ */
+export async function atualizarMetaHidratacao(
+  uid: string,
+  hydration_goal: number,
+  editadaManualmente: boolean,
+): Promise<void> {
+  await setDoc(
+    refUsuario(uid),
+    { hydration_goal, metaEditadaManualmente: editadaManualmente },
+    { merge: true },
+  );
+}
+
+/**
+ * Gera o Plano Provisório Inteligente via IA a partir do peso atual e já
+ * salva o resultado no documento do usuário. Peso é responsabilidade de quem
+ * chama (ex.: último registro de `weight_history`) — esta função só orquestra
+ * a chamada à Cloud Function e a escrita.
+ */
+export async function gerarESalvarMetasNutricionais(
+  uid: string,
+  weightKg: number,
+): Promise<MetasNutricionais> {
+  const chamar = httpsCallable<{ weightKg: number }, Omit<MetasNutricionais, 'generatedAt'>>(
+    getFunctionsCliente(),
+    'gerarPlanoNutricionalAI',
+  );
+
+  const { data } = await chamar({ weightKg });
+  const metas: MetasNutricionais = { ...data, generatedAt: new Date() };
+
+  await setDoc(refUsuario(uid), { nutritionGoals: metas }, { merge: true });
+  return metas;
 }
 
 export type NovoRegistroSintoma = Omit<RegistroSintoma, 'id'>;
@@ -310,6 +349,29 @@ export async function excluirRegistroIntestino(uid: string, registroId: string):
 export type NovoPlanoAlimentar = Omit<PlanoAlimentar, 'id' | 'createdAt'>;
 
 /**
+ * Preenche com a regra padrão do app qualquer meta do plano que tenha vindo
+ * zerada (= não informada manualmente nem extraída de um upload). Valor > 0
+ * já presente nunca é sobrescrito — nem pelo piso calórico, que só entra
+ * quando não há nenhuma estimativa de calorias.
+ */
+async function completarMetasPlano(
+  uid: string,
+  metas: Pick<PlanoAlimentar, 'proteinGoalG' | 'kcalGoal' | 'waterGoalMl'>,
+): Promise<Pick<PlanoAlimentar, 'proteinGoalG' | 'kcalGoal' | 'waterGoalMl'>> {
+  const precisaPeso = metas.proteinGoalG <= 0 || metas.kcalGoal <= 0 || metas.waterGoalMl <= 0;
+  const pesoKg = precisaPeso
+    ? ((await getDocs(query(colHistoricoPeso(uid), orderBy('recordedAt', 'desc'), limit(1)))).docs[0]?.data()
+        .weight ?? null)
+    : null;
+
+  return {
+    proteinGoalG: metas.proteinGoalG > 0 ? metas.proteinGoalG : calcularMetaProteina(pesoKg),
+    kcalGoal: metas.kcalGoal > 0 ? metas.kcalGoal : calcularMetaCalorica(pesoKg),
+    waterGoalMl: metas.waterGoalMl > 0 ? metas.waterGoalMl : calcularMetaHidratacao(pesoKg),
+  };
+}
+
+/**
  * Cria um plano alimentar. Se `isActive`, arquiva (isActive:false) todos os
  * outros planos da conta antes — mesmo desenho de `criarProtocolo`: um plano
  * ativo por vez.
@@ -324,10 +386,21 @@ export async function criarPlanoAlimentar(uid: string, novo: NovoPlanoAlimentar)
     await lote.commit();
   }
 
+  const metas = await completarMetasPlano(uid, novo);
+
   const criado = await addDoc(colPlanosAlimentares(uid), {
     ...novo,
+    ...metas,
     createdAt: new Date(),
   } as PlanoAlimentar);
+
+  // A meta de água do plano ativo manda na meta de hidratação do app inteiro
+  // — sem isso, TelaHidratacao e o anel do Dashboard podem mostrar dois
+  // números diferentes no mesmo dia.
+  if (novo.isActive) {
+    await atualizarMetaHidratacao(uid, metas.waterGoalMl, true);
+  }
+
   return criado.id;
 }
 
@@ -341,6 +414,10 @@ export async function atualizarPlanoAlimentar(
   campos: Partial<PlanoAlimentar>,
 ): Promise<void> {
   await updateDoc(doc(colPlanosAlimentares(uid), planoId), campos);
+
+  if (campos.waterGoalMl !== undefined && campos.waterGoalMl > 0) {
+    await atualizarMetaHidratacao(uid, campos.waterGoalMl, true);
+  }
 }
 
 /**

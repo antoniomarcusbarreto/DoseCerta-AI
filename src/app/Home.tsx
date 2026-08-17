@@ -1,215 +1,124 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alerta } from '@/components/Alerta';
+import { ArcGauge } from '@/components/ArcGauge';
 import { Button } from '@/components/Button';
-import { HairlineChart, type PontoHairline } from '@/components/HairlineChart';
+import { GraficoEvolucaoPeso } from '@/components/GraficoEvolucaoPeso';
 import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
-import { StatBig } from '@/components/StatBig';
-import { condutaDoseEsquecida, descreverLocal } from '@/domain/aplicacao';
-import { formatarData, formatarHorario, nomeDiaSemana } from '@/domain/datas';
-import { FolhaRegistro } from '@/features/aplicacao/FolhaRegistro';
 import { useDados } from '@/features/dados/DadosProvider';
+import {
+  consultaHidratacaoHoje,
+  consultaPlanosAlimentares,
+  consultaRefeicoesDeHojeConcluidas,
+} from '@/features/dados/repositorio';
+import { useColecao } from '@/lib/useConsulta';
 
 export function Home() {
-  const { uid, protocolo, aplicacoes, canetaAtiva, status, erro } = useDados();
-  const [registrando, setRegistrando] = useState(false);
+  const { uid } = useDados();
+  const [modo, setModo] = useState<'consumo' | 'meta'>('consumo');
 
-  if (!uid || !protocolo) return null;
-
-  const atrasada = status?.estado === 'atrasada';
-  const conduta = atrasada ? condutaDoseEsquecida(protocolo, status.diasAtraso) : null;
-
-  const rotuloProtocolo = [
-    `${protocolo.medicamento} ${protocolo.doseAtualMg.toLocaleString('pt-BR')} mg`,
-    protocolo.frequencia === 'semanal' && protocolo.diaSemana !== null
-      ? nomeDiaSemana(protocolo.diaSemana)
-      : 'diária',
-    formatarHorario(protocolo.horarioMin),
-  ].join(' · ');
-
-  // Altura = dose: mostra a titulação subindo e uma dose pulada como falha.
-  const historico: PontoHairline[] = [...aplicacoes]
-    .sort((a, b) => a.dataHora.getTime() - b.dataHora.getTime())
-    .slice(-12)
-    .map((a, i, todas) => ({
-      rotulo: formatarData(a.dataHora),
-      valor: a.status === 'aplicada' ? a.doseMg : 0,
-      detalhe:
-        a.status === 'pulada'
-          ? 'Pulada'
-          : `${a.doseMg.toLocaleString('pt-BR')} mg${a.local ? ` — ${descreverLocal(a.local)}` : ''}`,
-      destaque: i === todas.length - 1,
-    }));
-
-  const hero = (
-    <Hero
-      titulo={<span className="font-extrabold">Dose Certa<span className="text-teal-500">-AI</span></span>}
-      tom={atrasada ? 'alerta' : 'padrao'}
-      /* Com uma ou duas barras não há tendência para ler — só uma haste solta
-         no meio do herói. O gráfico só entra quando diz algo. */
-      aside={
-        historico.length >= 3 ? (
-          <div className="mt-6 lg:mt-0">
-            <HairlineChart pontos={historico} sobre="hero" maxRotulos={5} />
-          </div>
-        ) : null
-      }
-      acoes={
-        <div className="mt-6">
-          <Button
-            sobre="hero"
-            larguraTotal
-            /* No desktop a coluna do herói tem ~500px: uma pílula dessa
-               largura vira uma barra. Aqui o botão volta ao tamanho do texto. */
-            className="lg:w-auto"
-            onClick={() => setRegistrando(true)}
-          >
-            Registrar aplicação
-          </Button>
-        </div>
-      }
-    >
-      <div className="mt-8">
-        {status?.estado === 'em_dia' ? (
-          <StatBig
-            rotulo={rotuloProtocolo}
-            valor={status.diasAte}
-            sufixo={status.diasAte === 1 ? 'dia' : 'dias'}
-          />
-        ) : status?.estado === 'pendente_hoje' ? (
-          <StatBig rotulo={rotuloProtocolo} valor="Hoje" />
-        ) : status ? (
-          <StatBig
-            rotulo={rotuloProtocolo}
-            valor={status.diasAtraso}
-            sufixo={status.diasAtraso === 1 ? 'dia de atraso' : 'dias de atraso'}
-          />
-        ) : null}
-      </div>
-    </Hero>
+  const { dados: planos } = useColecao(
+    uid ? consultaPlanosAlimentares(uid) : null,
+    uid ? `${uid}/diet_plans/inicio` : null,
+  );
+  const { dados: refeicoesHoje } = useColecao(
+    uid ? consultaRefeicoesDeHojeConcluidas(uid) : null,
+    uid ? `${uid}/meals/hoje` : null,
+  );
+  const { dados: hidratacaoHoje } = useColecao(
+    uid ? consultaHidratacaoHoje(uid) : null,
+    uid ? `${uid}/hydration_logs/hoje` : null,
   );
 
-  /*
-   * Coluna de apoio do desktop. Sem ela a Home no caminho feliz teria um card
-   * só, e a segunda coluna ficaria vazia — o que lê como layout quebrado. O
-   * conteúdo é o protocolo em vigor, que hoje exige dois cliques para ver.
-   */
-  const lateral = (
-    <SheetCard
-      /* Exclusivo do desktop: no celular estes mesmos dados já estão no rótulo
-         do herói, e o card seria repetição. */
-      className="hidden lg:block"
-      titulo="Seu tratamento"
-      acao={
-        <Link to="/ajustes/tratamento">
-          <Button variante="fantasma" className="px-0">
-            Alterar
-          </Button>
-        </Link>
-      }
-    >
-      <dl className="divide-y" style={{ borderColor: 'var(--border-hair)' }}>
-        {[
-          ['Medicamento', protocolo.medicamento],
-          ['Dose', `${protocolo.doseAtualMg.toLocaleString('pt-BR')} mg`],
-          [
-            'Frequência',
-            protocolo.frequencia === 'semanal' && protocolo.diaSemana !== null
-              ? `Semanal · ${nomeDiaSemana(protocolo.diaSemana)}`
-              : 'Diária',
-          ],
-          ['Horário', formatarHorario(protocolo.horarioMin)],
-          ['Janela para repor dose', `${protocolo.diasLimiteReposicao} dia(s)`],
-        ].map(([rotulo, valor]) => (
-          <div key={rotulo} className="flex items-baseline justify-between gap-4 py-3">
-            <dt className="t-label text-ink-muted">{rotulo}</dt>
-            <dd className="t-label text-right text-ink">{valor}</dd>
-          </div>
-        ))}
-      </dl>
-    </SheetCard>
-  );
+  if (!uid) return null;
+
+  // As metas dos anéis vêm sempre do Plano Alimentar ativo — não importa se
+  // ele nasceu de upload de PDF, criação manual ou IA, todos gravam nos
+  // mesmos três campos (proteinGoalG/kcalGoal/waterGoalMl) do PlanoAlimentar.
+  const planoAtivo = planos.find((p) => p.isActive) ?? null;
+
+  const proteinaConsumida = refeicoesHoje.reduce((soma, r) => soma + r.macros.protein, 0);
+  const caloriasConsumidas = refeicoesHoje.reduce((soma, r) => soma + r.macros.kcal, 0);
+  const aguaConsumida = hidratacaoHoje.reduce((soma, r) => soma + r.amount_ml, 0);
+
+  const proteina = { valor: Math.round(proteinaConsumida), meta: planoAtivo?.proteinGoalG ?? 0 };
+  const calorias = { valor: Math.round(caloriasConsumidas), meta: planoAtivo?.kcalGoal ?? 0 };
+  const agua = { valor: Math.round(aguaConsumida), meta: planoAtivo?.waterGoalMl ?? 0 };
 
   return (
-    <>
-      <Pagina hero={hero} lateral={lateral}>
-        {erro ? (
-          <SheetCard>
-            <Alerta tom="danger" titulo="Não foi possível ler seus dados">
-              {erro.message}
-            </Alerta>
-          </SheetCard>
-        ) : null}
-
-        {conduta ? (
-          <SheetCard titulo="Dose em atraso">
-            <Alerta
-              tom={conduta.acao === 'aplicar_agora' ? 'warn' : 'danger'}
-              titulo={
-                conduta.acao === 'aplicar_agora'
-                  ? 'Ainda dá para aplicar'
-                  : 'O habitual é não repor esta dose'
-              }
+    <Pagina
+      hero={
+        <Hero titulo={<span className="font-extrabold">Dose Certa<span className="text-teal-500">-AI</span></span>}>
+          <div className="mt-6">
+            <p className="t-caption text-on-hero-muted">Hoje</p>
+            <p className="mt-1.5 text-3xl font-light tracking-tight text-on-hero sm:text-4xl lg:text-5xl">
+              {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}
+            </p>
+          </div>
+        </Hero>
+      }
+    >
+      <SheetCard
+        titulo="Resumo Nutricional de Hoje"
+        acao={
+          planoAtivo ? (
+            <Button
+              variante="fantasma"
+              onClick={() => setModo((m) => (m === 'consumo' ? 'meta' : 'consumo'))}
             >
-              {conduta.explicacao}
-            </Alerta>
-            <p className="t-label mt-3 text-ink-muted">
-              Isto é apoio, não prescrição. Confirme com quem acompanha você.
+              {modo === 'consumo' ? 'Ver metas' : 'Ver consumo'}
+            </Button>
+          ) : null
+        }
+      >
+        {planoAtivo ? (
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            <ArcGauge
+              compacto
+              valor={proteina.valor}
+              max={proteina.meta || 1}
+              exibicao={`${modo === 'consumo' ? proteina.valor : proteina.meta}g`}
+              legenda="Proteínas"
+              tom="ok"
+            />
+            <ArcGauge
+              compacto
+              valor={calorias.valor}
+              max={calorias.meta || 1}
+              exibicao={`${modo === 'consumo' ? calorias.valor : calorias.meta} kcal`}
+              legenda="Calorias"
+              tom="neutro"
+            />
+            <ArcGauge
+              compacto
+              valor={agua.valor}
+              max={agua.meta || 1}
+              exibicao={`${modo === 'consumo' ? agua.valor : agua.meta}ml`}
+              legenda="Água"
+              tom="ok"
+            />
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-5 py-2 text-center">
+            <div className="grid w-full grid-cols-3 gap-2 opacity-30 grayscale sm:gap-3" aria-hidden="true">
+              <ArcGauge compacto valor={0} max={1} exibicao="" legenda="Proteínas" tom="neutro" />
+              <ArcGauge compacto valor={0} max={1} exibicao="" legenda="Calorias" tom="neutro" />
+              <ArcGauge compacto valor={0} max={1} exibicao="" legenda="Água" tom="neutro" />
+            </div>
+            <p className="t-body max-w-sm text-ink-muted">
+              Ative um Plano Alimentar (Manual, Upload ou via IA) para acompanhar suas metas diárias.
             </p>
-          </SheetCard>
-        ) : null}
+            <Link to="/evolucao/dieta">
+              <Button variante="secundaria">Ir para Plano Alimentar</Button>
+            </Link>
+          </div>
+        )}
+      </SheetCard>
 
-        <SheetCard
-          titulo="Últimas aplicações"
-          subtitulo={`${aplicacoes.length} registro(s)`}
-          acao={
-            aplicacoes.length > 0 ? (
-              <Link to="/historico">
-                <Button variante="fantasma" className="px-0">
-                  Ver tudo
-                </Button>
-              </Link>
-            ) : null
-          }
-        >
-          {aplicacoes.length === 0 ? (
-            <p className="t-body text-ink-muted">
-              Nenhuma aplicação registrada ainda. O primeiro registro aparece aqui.
-            </p>
-          ) : (
-            <ul className="divide-y" style={{ borderColor: 'var(--border-hair)' }}>
-              {aplicacoes.slice(0, 4).map((a) => (
-                <li key={a.id} className="flex items-baseline justify-between gap-3 py-3">
-                  <div className="min-w-0">
-                    <p className="t-label text-ink">
-                      {a.dataHora.toLocaleDateString('pt-BR')} ·{' '}
-                      {a.doseMg.toLocaleString('pt-BR')} mg
-                    </p>
-                    {a.local ? (
-                      <p className="t-label text-ink-muted">{descreverLocal(a.local)}</p>
-                    ) : null}
-                  </div>
-                  <span className="t-caption shrink-0 text-ink-muted">
-                    {a.status === 'aplicada' ? 'aplicada' : 'pulada'}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </SheetCard>
-      </Pagina>
-
-      {registrando ? (
-        <FolhaRegistro
-          uid={uid}
-          protocolo={protocolo}
-          aplicacoes={aplicacoes}
-          canetaId={canetaAtiva?.id ?? null}
-          onFechar={() => setRegistrando(false)}
-        />
-      ) : null}
-    </>
+      <SheetCard titulo="Curva de Evolução">
+        <GraficoEvolucaoPeso />
+      </SheetCard>
+    </Pagina>
   );
 }

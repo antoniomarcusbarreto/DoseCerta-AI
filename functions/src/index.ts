@@ -13,6 +13,8 @@ export {
   lembreteAplicacao,
   acompanhamentoSintoma,
   engajamentoRotina,
+  hidratacaoMetadeDia,
+  hidratacaoRetaFinal,
 } from './notificacoes.js';
 export { excluirContaUsuario } from './conta.js';
 export { enviarCodigoRecuperacao, redefinirSenhaComCodigo } from './recuperacaoSenha.js';
@@ -23,12 +25,30 @@ const geminiModel = defineString('GEMINI_MODEL', { default: 'gemini-flash-latest
 const TAMANHO_MAXIMO_ARQUIVO = 8 * 1024 * 1024; // 8 MB, generoso para PDF/DOCX de dieta
 
 type RefeicaoExtraida = { name: string; time: string; description: string };
-type PlanoExtraido = { title: string; meals: RefeicaoExtraida[] };
+type PlanoExtraido = {
+  title: string;
+  meals: RefeicaoExtraida[];
+  proteinGoalG: number;
+  kcalGoal: number;
+  waterGoalMl: number;
+};
 
 const esquemaPlanoAlimentar = {
   type: Type.OBJECT,
   properties: {
     title: { type: Type.STRING, description: 'Nome/título do plano alimentar' },
+    proteinGoalG: {
+      type: Type.NUMBER,
+      description: 'Meta diária de proteína em gramas, se o documento mencionar. 0 se não houver.',
+    },
+    kcalGoal: {
+      type: Type.NUMBER,
+      description: 'Meta diária de calorias em kcal, se o documento mencionar. 0 se não houver.',
+    },
+    waterGoalMl: {
+      type: Type.NUMBER,
+      description: 'Meta diária de água em mililitros, se o documento mencionar. 0 se não houver.',
+    },
     meals: {
       type: Type.ARRAY,
       items: {
@@ -42,7 +62,7 @@ const esquemaPlanoAlimentar = {
       },
     },
   },
-  required: ['title', 'meals'],
+  required: ['title', 'meals', 'proteinGoalG', 'kcalGoal', 'waterGoalMl'],
 };
 
 /**
@@ -81,7 +101,11 @@ export const importarDietaIA = onCall(
     const prompt =
       'Extraia o plano alimentar deste documento. Identifique um título curto para o plano ' +
       'e cada refeição (nome, horário no formato HH:MM e a descrição dos alimentos). ' +
-      'Se um horário não estiver explícito, estime um horário plausível para o tipo de refeição.';
+      'Se um horário não estiver explícito, estime um horário plausível para o tipo de refeição. ' +
+      'Identifique também metas diárias explícitas de proteína (g), calorias (kcal) e água (ml), ' +
+      'se o documento as mencionar (ex.: "meta de 120g de proteína por dia", "beber 2L de água"). ' +
+      'Não estime nem calcule essas metas a partir das refeições — só as extraia se estiverem ' +
+      'explicitamente escritas no documento. Retorne 0 para qualquer meta que não esteja explícita.';
 
     try {
       const resposta = await genAI.models.generateContent({
@@ -107,6 +131,9 @@ export const importarDietaIA = onCall(
 
       return {
         title: extraido.title,
+        proteinGoalG: Number(extraido.proteinGoalG) || 0,
+        kcalGoal: Number(extraido.kcalGoal) || 0,
+        waterGoalMl: Number(extraido.waterGoalMl) || 0,
         meals: extraido.meals.map((refeicao) => ({
           id: crypto.randomUUID(),
           name: refeicao.name,
@@ -127,6 +154,92 @@ async function extrairTextoDocx(base64: string): Promise<string> {
   const { value } = await mammoth.extractRawText({ buffer });
   return value;
 }
+
+const PROTEINA_G_POR_KG = 1.35; // ponto médio de 1.2–1.5 g/kg
+const FIBRA_G_FIXA = 27.5; // ponto médio de 25–30g
+const PISO_KCAL = 1200;
+
+const esquemaPlanoNutricional = {
+  type: Type.OBJECT,
+  properties: {
+    suggestedMenu: {
+      type: Type.STRING,
+      description:
+        'Cardápio sugestivo de exemplo (café da manhã, almoço, lanche, jantar) que bate as metas de proteína, fibra e calorias fornecidas.',
+    },
+    estimatedKcal: {
+      type: Type.NUMBER,
+      description: 'Estimativa de calorias totais do cardápio sugerido.',
+    },
+  },
+  required: ['suggestedMenu', 'estimatedKcal'],
+};
+
+const DISCLAIMER_METAS_NUTRICIONAIS =
+  'Esta é uma sugestão algorítmica e provisória, calculada automaticamente. ' +
+  'Não substitui uma avaliação nutricional individualizada — consulte um nutricionista ' +
+  'para um plano alimentar adequado ao seu caso.';
+
+/**
+ * Gera metas nutricionais provisórias (proteína, fibra, piso calórico e um
+ * cardápio de exemplo) a partir do peso atual, para quem ainda não tem um
+ * plano de nutricionista. Proteína, fibra e o piso calórico são regras de
+ * segurança calculadas em código — nunca confiadas ao texto livre do modelo;
+ * o Gemini só monta o cardápio em linguagem natural, batendo essas metas.
+ */
+export const gerarPlanoNutricionalAI = onCall(
+  { secrets: [geminiApiKey], region: 'southamerica-east1', cors: true },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'É necessário estar logado.');
+    }
+
+    const { weightKg } = request.data as { weightKg?: number };
+    if (!Number.isFinite(weightKg) || (weightKg as number) <= 0) {
+      throw new HttpsError('invalid-argument', 'weightKg deve ser um número positivo.');
+    }
+
+    const proteinGoalG = Math.round(weightKg! * PROTEINA_G_POR_KG * 10) / 10;
+    const fiberGoalG = FIBRA_G_FIXA;
+
+    const genAI = new GoogleGenAI({ apiKey: geminiApiKey.value() });
+    const prompt =
+      `Monte um cardápio de exemplo, amigável e em português, para uma pessoa de ${weightKg}kg ` +
+      `que precisa bater aproximadamente ${proteinGoalG}g de proteína e ${fiberGoalG}g de fibra por dia, ` +
+      `com no mínimo ${PISO_KCAL} kcal no total. Distribua em café da manhã, almoço, lanche e jantar.`;
+
+    try {
+      const resposta = await genAI.models.generateContent({
+        model: geminiModel.value(),
+        contents: [{ text: prompt }],
+        config: { responseMimeType: 'application/json', responseSchema: esquemaPlanoNutricional },
+      });
+
+      const texto = resposta.text;
+      if (!texto) throw new HttpsError('internal', 'A IA não retornou conteúdo.');
+
+      const extraido = JSON.parse(texto) as { suggestedMenu: string; estimatedKcal: number };
+      if (!extraido.suggestedMenu) {
+        throw new HttpsError('internal', 'Resposta da IA em formato inesperado.');
+      }
+
+      // Piso calórico garantido em código, não confiado ao modelo.
+      const kcalFloor = Math.max(Number(extraido.estimatedKcal) || 0, PISO_KCAL);
+
+      return {
+        proteinGoalG,
+        fiberGoalG,
+        kcalFloor,
+        suggestedMenu: extraido.suggestedMenu,
+        disclaimer: DISCLAIMER_METAS_NUTRICIONAIS,
+      };
+    } catch (falha) {
+      if (falha instanceof HttpsError) throw falha;
+      console.error('[gerarPlanoNutricionalAI] falha ao gerar plano via Gemini', falha);
+      throw new HttpsError('internal', 'Não foi possível gerar o plano provisório. Tente novamente.');
+    }
+  },
+);
 
 type ItemRefeicaoExtraido = { name: string; quantity: string };
 type MacrosExtraidos = { protein: number; carbs: number; fat: number; kcal: number };

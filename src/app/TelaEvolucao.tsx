@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom';
-import { GraficoEvolucaoPeso } from '@/components/GraficoEvolucaoPeso';
 import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 
@@ -81,12 +80,6 @@ export function TelaEvolucao() {
             </div>
             <span className="font-semibold text-ink text-sm text-center">Sintomas</span>
           </Link>
-        </div>
-
-        {/* Seção de Gráfico (Meio) */}
-        <div className="bg-card rounded-xl shadow-md p-5 flex flex-col gap-4">
-          <h3 className="t-title text-ink">Curva de Evolução</h3>
-          <GraficoEvolucaoPeso />
         </div>
 
         {/* Ações Secundárias (Base) */}

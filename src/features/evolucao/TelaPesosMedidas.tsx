@@ -7,9 +7,15 @@ import { Field } from '@/components/Field';
 import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
+import { calcularMetaHidratacao } from '@/domain/hidratacao';
 import { calcularImc, deltaPeso } from '@/domain/medidas';
 import { useDados } from '@/features/dados/DadosProvider';
-import { atualizarAltura, consultaHistoricoPeso, criarRegistroPeso } from '@/features/dados/repositorio';
+import {
+  atualizarAltura,
+  atualizarMetaHidratacao,
+  consultaHistoricoPeso,
+  criarRegistroPeso,
+} from '@/features/dados/repositorio';
 import { refUsuario } from '@/lib/firestore';
 import { useColecao, useDocumento } from '@/lib/useConsulta';
 
@@ -60,6 +66,7 @@ export function TelaPesosMedidas() {
   const [notas, setNotas] = useState('');
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [sugestaoMetaAgua, setSugestaoMetaAgua] = useState<number | null>(null);
 
   if (!uid) return null;
 
@@ -103,11 +110,32 @@ export function TelaPesosMedidas() {
       setCintura('');
       setAltura('');
       setNotas('');
+
+      const metaSugerida = calcularMetaHidratacao(pesoNum);
+      if (metaSugerida !== (usuario?.hydration_goal ?? null)) {
+        if (usuario?.metaEditadaManualmente) {
+          // Meta foi curada pela pessoa (possível orientação médica): só sugere, não sobrescreve.
+          setSugestaoMetaAgua(metaSugerida);
+        } else {
+          await atualizarMetaHidratacao(uid, metaSugerida, false);
+        }
+      }
     } catch (falha) {
       console.error('[DoseCerta] falha ao registrar peso', falha);
       setErro('Não foi possível salvar o registro. Tente novamente.');
     } finally {
       setSalvando(false);
+    }
+  }
+
+  async function aceitarRecalculoMetaAgua() {
+    if (!uid || sugestaoMetaAgua === null) return;
+    try {
+      await atualizarMetaHidratacao(uid, sugestaoMetaAgua, false);
+      setSugestaoMetaAgua(null);
+    } catch (falha) {
+      console.error('[DoseCerta] falha ao recalcular meta de hidratação', falha);
+      setErro('Não foi possível atualizar a meta de água. Tente novamente.');
     }
   }
 
@@ -194,6 +222,25 @@ export function TelaPesosMedidas() {
             {salvando ? 'Salvando…' : 'Salvar registro'}
           </Button>
         </form>
+
+        {sugestaoMetaAgua !== null ? (
+          <div className="mt-4">
+            <Alerta tom="warn" titulo="Seu peso mudou. Deseja recalcular sua meta de água?">
+              <p>
+                Nova meta sugerida: {sugestaoMetaAgua.toLocaleString('pt-BR')} ml/dia. Sua meta atual
+                foi definida manualmente e não será alterada sem sua confirmação.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <Button type="button" variante="secundaria" onClick={aceitarRecalculoMetaAgua}>
+                  Recalcular
+                </Button>
+                <Button type="button" variante="fantasma" onClick={() => setSugestaoMetaAgua(null)}>
+                  Manter minha meta
+                </Button>
+              </div>
+            </Alerta>
+          </div>
+        ) : null}
       </SheetCard>
 
       <SheetCard titulo="Últimos registros">
