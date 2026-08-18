@@ -5,6 +5,7 @@ import { Button } from '@/components/Button';
 import { ArcGauge } from '@/components/ArcGauge';
 import { SheetCard } from '@/components/SheetCard';
 import { Carregando } from '@/components/Carregando';
+import { rodandoComoPWAInstalado } from '@/features/auth/sessao';
 
 const COR_MARCA = '#14b8a6';
 
@@ -333,6 +334,12 @@ export function LandingPage() {
 
   if (carregando) return <Carregando />;
   if (usuario) return <Navigate to="/inicio" replace />;
+  /*
+   * PWA instalado abrindo em "/" não deve mostrar a landing de marketing —
+   * quem já instalou o app já passou da fase de "conhecer o produto". Sem
+   * sessão, o próximo passo é sempre a tela de login.
+   */
+  if (rodandoComoPWAInstalado()) return <Navigate to="/entrar" replace />;
 
   return (
     <div className="min-h-dvh bg-page">

@@ -3,7 +3,7 @@
   "short_name": "DoseCerta",
   "description": "Seu co-piloto de hábitos e tratamento com GLP-1.",
   "lang": "pt-BR",
-  "start_url": "/",
+  "start_url": "/entrar",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

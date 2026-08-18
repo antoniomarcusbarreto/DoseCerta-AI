@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { firebaseConfigurado } from '@/lib/firebase';
+import { Carregando } from '@/components/Carregando';
 import { useAuth } from './AuthProvider';
 
 type Modo = 'entrar' | 'criar';
@@ -42,6 +43,7 @@ function traduzirErroRecuperacao(erro: unknown): string {
 export function TelaAuth({ modo }: { modo: Modo }) {
   const {
     usuario,
+    carregando,
     entrar,
     criarConta,
     enviarCodigoRecuperacao,
@@ -157,6 +159,7 @@ export function TelaAuth({ modo }: { modo: Modo }) {
     }
   }
 
+  if (carregando) return <Carregando />;
   if (usuario) return <Navigate to="/inicio" replace />;
 
   if (vinculoPendente) {
