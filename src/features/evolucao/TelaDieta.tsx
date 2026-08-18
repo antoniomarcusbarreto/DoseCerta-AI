@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { Alerta } from '@/components/Alerta';
 import { Button } from '@/components/Button';
@@ -11,14 +12,21 @@ import { SheetCard } from '@/components/SheetCard';
 import { ordenarRefeicoesPorDiaEHorario } from '@/domain/datas';
 import type { Refeicao } from '@/domain/tipos';
 import { useDados } from '@/features/dados/DadosProvider';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
 import {
   atualizarPlanoAlimentar,
-  consultaPlanosAlimentares,
+  consultaHistoricoPeso,
   criarPlanoAlimentar,
   excluirPlanoAlimentar,
+  gerarPlanoAlimentarComIA,
 } from '@/features/dados/repositorio';
 import { getFunctionsCliente } from '@/lib/firebase';
-import { useColecao } from '@/lib/useConsulta';
+
+const MENSAGENS_GERANDO = [
+  'A IA está calculando suas necessidades metabólicas...',
+  'Montando seu plano ideal...',
+  'Selecionando refeições para proteger sua massa magra...',
+];
 
 const EXTENSOES_ACEITAS_IA = new Set([
   'application/pdf',
@@ -58,6 +66,18 @@ const IconeVoltar = () => (
   </svg>
 );
 
+const IconeSpinner = () => (
+  <svg viewBox="0 0 24 24" className="size-4 animate-spin" aria-hidden="true">
+    <path
+      d="M12 3a9 9 0 1 0 9 9"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 function novaRefeicaoVazia(): Refeicao {
   return { id: crypto.randomUUID(), name: '', time: '', description: '' };
 }
@@ -66,8 +86,7 @@ export function TelaDieta() {
   const navegar = useNavigate();
   const { uid } = useDados();
 
-  const consulta = uid ? consultaPlanosAlimentares(uid) : null;
-  const { dados: planos, carregando } = useColecao(consulta, uid ? `${uid}/diet_plans` : null);
+  const { planos, planosCarregando: carregando } = useEvolucao();
 
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
   const [titulo, setTitulo] = useState('');
@@ -83,6 +102,11 @@ export function TelaDieta() {
   const [excluindoAtivo, setExcluindoAtivo] = useState(false);
   const [erroExclusaoAtivo, setErroExclusaoAtivo] = useState<string | null>(null);
 
+  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
+  const [mensagemGerandoIndice, setMensagemGerandoIndice] = useState(0);
+  const [erroPlanoIA, setErroPlanoIA] = useState<string | null>(null);
+  const [sucessoPlanoIA, setSucessoPlanoIA] = useState<string | null>(null);
+
   const [editandoMetas, setEditandoMetas] = useState(false);
   const [metasEmEdicao, setMetasEmEdicao] = useState({ proteinGoalG: '', kcalGoal: '', waterGoalMl: '' });
   const [salvandoMetas, setSalvandoMetas] = useState(false);
@@ -94,6 +118,15 @@ export function TelaDieta() {
   const [novaRefeicaoDraft, setNovaRefeicaoDraft] = useState<Refeicao>(novaRefeicaoVazia());
   const [salvandoRefeicaoId, setSalvandoRefeicaoId] = useState<string | 'nova' | null>(null);
   const [erroRefeicoes, setErroRefeicoes] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isGeneratingPlan) return;
+    setMensagemGerandoIndice(0);
+    const intervalo = setInterval(() => {
+      setMensagemGerandoIndice((i) => (i + 1) % MENSAGENS_GERANDO.length);
+    }, 2500);
+    return () => clearInterval(intervalo);
+  }, [isGeneratingPlan]);
 
   if (!uid) return null;
 
@@ -188,6 +221,29 @@ export function TelaDieta() {
       setErro('Não foi possível salvar o plano. Tente novamente.');
     } finally {
       setSalvando(false);
+    }
+  }
+
+  async function gerarPlanoComIA() {
+    if (!uid) return;
+    setErroPlanoIA(null);
+    setSucessoPlanoIA(null);
+    setIsGeneratingPlan(true);
+    try {
+      const ultimoPeso = await getDocs(consultaHistoricoPeso(uid, 1));
+      const pesoKg = ultimoPeso.docs[0]?.data().weight ?? null;
+      if (!pesoKg) {
+        setErroPlanoIA('Registre seu peso em "Peso e Medidas" antes de gerar um plano com IA.');
+        return;
+      }
+      await gerarPlanoAlimentarComIA(uid, pesoKg);
+      setIsCreatingPlan(false);
+      setSucessoPlanoIA('Plano gerado com sucesso! Suas metas foram atualizadas.');
+    } catch (falha) {
+      console.error('[DoseCerta] falha ao gerar plano com IA', falha);
+      setErroPlanoIA('Não foi possível gerar o plano agora. Tente novamente em instantes.');
+    } finally {
+      setIsGeneratingPlan(false);
     }
   }
 
@@ -328,7 +384,10 @@ export function TelaDieta() {
         acao={
           <Button
             variante="secundaria"
-            onClick={() => setIsCreatingPlan((v) => !v)}
+            onClick={() => {
+              setSucessoPlanoIA(null);
+              setIsCreatingPlan((v) => !v);
+            }}
           >
             {isCreatingPlan ? 'Cancelar' : 'Criar Novo Plano'}
           </Button>
@@ -338,6 +397,8 @@ export function TelaDieta() {
           <p className="t-label text-ink-muted">Carregando…</p>
         ) : planoAtivo ? (
           <div className="flex flex-col gap-3">
+            {sucessoPlanoIA ? <Alerta tom="ok" titulo={sucessoPlanoIA} /> : null}
+
             <div className="flex items-center justify-between gap-3">
               <p className="t-title text-ink">{planoAtivo.title}</p>
               <Button
@@ -551,6 +612,31 @@ export function TelaDieta() {
       {isCreatingPlan ? (
         <SheetCard titulo="Novo plano">
           <form onSubmit={salvar} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2 rounded-xl border-2 border-violet-500/40 bg-violet-500/10 p-4">
+              <p className="t-label font-semibold text-ink">✨ Gerar Plano com IA</p>
+              <p className="t-caption text-ink-muted">
+                A Inteligência Artificial analisa seu peso atual e cria um plano nutricional focado em
+                proteger sua massa magra durante o uso da medicação.
+              </p>
+              <Button
+                type="button"
+                larguraTotal
+                disabled={isGeneratingPlan}
+                onClick={gerarPlanoComIA}
+                className="mt-1"
+              >
+                {isGeneratingPlan ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <IconeSpinner />
+                    {MENSAGENS_GERANDO[mensagemGerandoIndice]}
+                  </span>
+                ) : (
+                  '✨ Gerar Plano com IA'
+                )}
+              </Button>
+              {erroPlanoIA ? <Alerta tom="danger" titulo={erroPlanoIA} /> : null}
+            </div>
+
             <div
               className="flex flex-col gap-3 border p-3"
               style={{ borderColor: 'var(--border-hair)', borderRadius: 'var(--r-field)' }}

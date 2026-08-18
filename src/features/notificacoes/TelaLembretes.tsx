@@ -27,7 +27,7 @@ const MENSAGEM_TESTE_ERRO = 'Não foi possível enviar a notificação de teste.
 
 export function TelaLembretes() {
   const navegar = useNavigate();
-  const { permissao, habilitando, tokenSalvo, erro, habilitar } = useNotificacoes();
+  const { permissao, precisaInstalar, habilitando, tokenSalvo, erro, habilitar } = useNotificacoes();
 
   const [testando, setTestando] = useState(false);
   const [testeEnviado, setTesteEnviado] = useState(false);
@@ -72,14 +72,18 @@ export function TelaLembretes() {
         subtitulo="Receba um aviso no dia da aplicação, acompanhamento de sintomas e lembretes de check-in."
       >
         <div className="space-y-4">
-          {permissao === 'denied' ? (
+          {precisaInstalar ? (
+            <Alerta tom="warn" titulo="Instale o app para receber notificações">
+              No iPhone, as notificações só funcionam com o Dose Certa instalado na Tela de Início.
+              Toque no ícone de Compartilhar do Safari e depois em "Adicionar à Tela de Início" —
+              depois volte aqui pelo atalho instalado.
+            </Alerta>
+          ) : permissao === 'denied' ? (
             <Alerta tom="warn" titulo="Notificações bloqueadas">
               Você negou a permissão para este site. Habilite pelas configurações do navegador para
               receber os lembretes.
             </Alerta>
-          ) : null}
-
-          {habilitado ? (
+          ) : habilitado ? (
             <Alerta tom="ok" titulo="Notificações habilitadas">
               Você vai receber os lembretes de aplicação, sintomas e check-in neste dispositivo.
             </Alerta>

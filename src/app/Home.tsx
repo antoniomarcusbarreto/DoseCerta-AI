@@ -7,29 +7,12 @@ import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
 import { useDados } from '@/features/dados/DadosProvider';
-import {
-  consultaHidratacaoHoje,
-  consultaPlanosAlimentares,
-  consultaRefeicoesDeHojeConcluidas,
-} from '@/features/dados/repositorio';
-import { useColecao } from '@/lib/useConsulta';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
 
 export function Home() {
   const { uid } = useDados();
+  const { planos, refeicoesHoje, hidratacaoHoje } = useEvolucao();
   const [modo, setModo] = useState<'consumo' | 'meta'>('consumo');
-
-  const { dados: planos } = useColecao(
-    uid ? consultaPlanosAlimentares(uid) : null,
-    uid ? `${uid}/diet_plans/inicio` : null,
-  );
-  const { dados: refeicoesHoje } = useColecao(
-    uid ? consultaRefeicoesDeHojeConcluidas(uid) : null,
-    uid ? `${uid}/meals/hoje` : null,
-  );
-  const { dados: hidratacaoHoje } = useColecao(
-    uid ? consultaHidratacaoHoje(uid) : null,
-    uid ? `${uid}/hydration_logs/hoje` : null,
-  );
 
   if (!uid) return null;
 

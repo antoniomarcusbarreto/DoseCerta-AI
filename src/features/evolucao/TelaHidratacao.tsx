@@ -10,16 +10,15 @@ import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
 import { calcularMetaHidratacao } from '@/domain/hidratacao';
 import { useDados } from '@/features/dados/DadosProvider';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
 import {
   atualizarMetaHidratacao,
-  consultaHidratacaoHoje,
   consultaHistoricoPeso,
-  consultaPlanosAlimentares,
   criarRegistroHidratacao,
   excluirRegistroHidratacao,
 } from '@/features/dados/repositorio';
 import { refUsuario } from '@/lib/firestore';
-import { useColecao, useDocumento } from '@/lib/useConsulta';
+import { useDocumento } from '@/lib/useConsulta';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -41,14 +40,11 @@ export function TelaHidratacao() {
   const refUsuarioAtual = uid ? refUsuario(uid) : null;
   const { dados: usuario, carregando: carregandoMeta } = useDocumento(refUsuarioAtual);
 
-  const consulta = uid ? consultaHidratacaoHoje(uid) : null;
-  const { dados: registrosHoje, carregando: carregandoHistorico } = useColecao(
-    consulta,
-    uid ? `${uid}/hydration_logs/hoje` : null,
-  );
-
-  const consultaPlanos = uid ? consultaPlanosAlimentares(uid) : null;
-  const { dados: planos } = useColecao(consultaPlanos, uid ? `${uid}/diet_plans` : null);
+  const {
+    hidratacaoHoje: registrosHoje,
+    hidratacaoHojeCarregando: carregandoHistorico,
+    planos,
+  } = useEvolucao();
   const planoAtivo = planos.find((p) => p.isActive) ?? null;
 
   const meta = usuario?.hydration_goal ?? null;

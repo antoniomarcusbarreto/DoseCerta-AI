@@ -9,6 +9,15 @@ service cloud.firestore {
     match /users/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
 
+      // Espelho do bloqueio de conta (Auth `disabled`), escrito só pela
+      // Cloud Function `adminDefinirBloqueio` via Admin SDK. O cliente só
+      // pode ler — se pudesse escrever, um token ainda válido durante a
+      // janela até o refresh falhar poderia reverter o próprio bloqueio.
+      match /estado/conta {
+        allow read: if request.auth != null && request.auth.uid == uid;
+        allow write: if false;
+      }
+
       match /{documento=**} {
         allow read, write: if request.auth != null && request.auth.uid == uid;
       }

@@ -15,9 +15,21 @@ export {
   engajamentoRotina,
   hidratacaoMetadeDia,
   hidratacaoRetaFinal,
+  nutricaoAlertaTarde,
+  nutricaoRetaFinal,
 } from './notificacoes.js';
 export { excluirContaUsuario } from './conta.js';
 export { enviarCodigoRecuperacao, redefinirSenhaComCodigo } from './recuperacaoSenha.js';
+export {
+  iniciarLoginAdmin,
+  verificarLoginAdmin,
+  adminListarUsuarios,
+  adminAlterarSenha,
+  adminDefinirBloqueio,
+  adminDefinirGratuidade,
+  adminMetricas,
+  adminEnviarBroadcast,
+} from './admin.js';
 
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const geminiModel = defineString('GEMINI_MODEL', { default: 'gemini-flash-latest' });
@@ -155,39 +167,41 @@ async function extrairTextoDocx(base64: string): Promise<string> {
   return value;
 }
 
-const PROTEINA_G_POR_KG = 1.35; // ponto médio de 1.2–1.5 g/kg
-const FIBRA_G_FIXA = 27.5; // ponto médio de 25–30g
-const PISO_KCAL = 1200;
+type RefeicaoGerada = { name: string; time: string; description: string };
+type PlanoGerado = { title: string; meals: RefeicaoGerada[] };
 
-const esquemaPlanoNutricional = {
+const esquemaPlanoGerado = {
   type: Type.OBJECT,
   properties: {
-    suggestedMenu: {
-      type: Type.STRING,
-      description:
-        'Cardápio sugestivo de exemplo (café da manhã, almoço, lanche, jantar) que bate as metas de proteína, fibra e calorias fornecidas.',
-    },
-    estimatedKcal: {
-      type: Type.NUMBER,
-      description: 'Estimativa de calorias totais do cardápio sugerido.',
+    title: { type: Type.STRING, description: 'Nome curto e motivador para o plano' },
+    meals: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING, description: 'Nome da refeição, ex: "Café da manhã"' },
+          time: { type: Type.STRING, description: 'Horário no formato HH:MM (24h)' },
+          description: { type: Type.STRING, description: 'Itens/alimentos da refeição' },
+        },
+        required: ['name', 'time', 'description'],
+      },
     },
   },
-  required: ['suggestedMenu', 'estimatedKcal'],
+  required: ['title', 'meals'],
 };
 
-const DISCLAIMER_METAS_NUTRICIONAIS =
-  'Esta é uma sugestão algorítmica e provisória, calculada automaticamente. ' +
-  'Não substitui uma avaliação nutricional individualizada — consulte um nutricionista ' +
-  'para um plano alimentar adequado ao seu caso.';
+const PROTEINA_G_POR_KG_PROMPT = 1.35;
+const PISO_KCAL_PROMPT = 1200;
 
 /**
- * Gera metas nutricionais provisórias (proteína, fibra, piso calórico e um
- * cardápio de exemplo) a partir do peso atual, para quem ainda não tem um
- * plano de nutricionista. Proteína, fibra e o piso calórico são regras de
- * segurança calculadas em código — nunca confiadas ao texto livre do modelo;
- * o Gemini só monta o cardápio em linguagem natural, batendo essas metas.
+ * Gera um plano alimentar provisório (título + refeições) a partir do peso
+ * atual, para quem ainda não tem plano de nutricionista. O Gemini só cuida do
+ * conteúdo (cardápio); as metas numéricas do plano (proteína/kcal/água) são
+ * preenchidas depois no cliente por `completarMetasPlano`
+ * (`src/features/dados/repositorio.ts`), com a mesma fórmula por peso usada
+ * em qualquer outro plano — mantém uma única fonte para essas contas.
  */
-export const gerarPlanoNutricionalAI = onCall(
+export const gerarPlanoAlimentarIA = onCall(
   { secrets: [geminiApiKey], region: 'southamerica-east1', cors: true },
   async (request) => {
     if (!request.auth) {
@@ -199,43 +213,43 @@ export const gerarPlanoNutricionalAI = onCall(
       throw new HttpsError('invalid-argument', 'weightKg deve ser um número positivo.');
     }
 
-    const proteinGoalG = Math.round(weightKg! * PROTEINA_G_POR_KG * 10) / 10;
-    const fiberGoalG = FIBRA_G_FIXA;
+    const proteinaAlvo = Math.round(weightKg! * PROTEINA_G_POR_KG_PROMPT);
 
     const genAI = new GoogleGenAI({ apiKey: geminiApiKey.value() });
     const prompt =
-      `Monte um cardápio de exemplo, amigável e em português, para uma pessoa de ${weightKg}kg ` +
-      `que precisa bater aproximadamente ${proteinGoalG}g de proteína e ${fiberGoalG}g de fibra por dia, ` +
-      `com no mínimo ${PISO_KCAL} kcal no total. Distribua em café da manhã, almoço, lanche e jantar.`;
+      `Monte um plano alimentar de exemplo, em português, para uma pessoa de ${weightKg}kg em uso de ` +
+      'medicação para emagrecimento (GLP-1). Priorize alimentos ricos em proteína magra e fibras, ' +
+      `distribuídos em café da manhã, almoço, lanche e jantar, somando aproximadamente ${proteinaAlvo}g ` +
+      `de proteína no dia e no mínimo ${PISO_KCAL_PROMPT} kcal no total — o foco é proteger a massa magra ` +
+      'durante o tratamento, não induzir déficit calórico agressivo.';
 
     try {
       const resposta = await genAI.models.generateContent({
         model: geminiModel.value(),
         contents: [{ text: prompt }],
-        config: { responseMimeType: 'application/json', responseSchema: esquemaPlanoNutricional },
+        config: { responseMimeType: 'application/json', responseSchema: esquemaPlanoGerado },
       });
 
       const texto = resposta.text;
       if (!texto) throw new HttpsError('internal', 'A IA não retornou conteúdo.');
 
-      const extraido = JSON.parse(texto) as { suggestedMenu: string; estimatedKcal: number };
-      if (!extraido.suggestedMenu) {
+      const extraido = JSON.parse(texto) as PlanoGerado;
+      if (!extraido.title || !Array.isArray(extraido.meals)) {
         throw new HttpsError('internal', 'Resposta da IA em formato inesperado.');
       }
 
-      // Piso calórico garantido em código, não confiado ao modelo.
-      const kcalFloor = Math.max(Number(extraido.estimatedKcal) || 0, PISO_KCAL);
-
       return {
-        proteinGoalG,
-        fiberGoalG,
-        kcalFloor,
-        suggestedMenu: extraido.suggestedMenu,
-        disclaimer: DISCLAIMER_METAS_NUTRICIONAIS,
+        title: extraido.title,
+        meals: extraido.meals.map((refeicao) => ({
+          id: crypto.randomUUID(),
+          name: refeicao.name,
+          time: refeicao.time,
+          description: refeicao.description,
+        })),
       };
     } catch (falha) {
       if (falha instanceof HttpsError) throw falha;
-      console.error('[gerarPlanoNutricionalAI] falha ao gerar plano via Gemini', falha);
+      console.error('[gerarPlanoAlimentarIA] falha ao gerar plano via Gemini', falha);
       throw new HttpsError('internal', 'Não foi possível gerar o plano provisório. Tente novamente.');
     }
   },

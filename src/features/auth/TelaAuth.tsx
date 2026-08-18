@@ -157,7 +157,7 @@ export function TelaAuth({ modo }: { modo: Modo }) {
     }
   }
 
-  if (usuario) return <Navigate to="/" replace />;
+  if (usuario) return <Navigate to="/inicio" replace />;
 
   if (vinculoPendente) {
     return (

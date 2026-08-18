@@ -1,5 +1,12 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, type Auth } from 'firebase/auth';
+import {
+  initializeAuth,
+  browserLocalPersistence,
+  indexedDBLocalPersistence,
+  browserPopupRedirectResolver,
+  GoogleAuthProvider,
+  type Auth,
+} from 'firebase/auth';
 import {
   initializeFirestore,
   persistentLocalCache,
@@ -42,7 +49,16 @@ function garantirApp(): FirebaseApp {
 }
 
 export function getAuthCliente(): Auth {
-  if (!auth) auth = getAuth(garantirApp());
+  if (!auth) {
+    // Persistência explícita — sem isto o app fica dependendo do default
+    // implícito do SDK pra não deslogar o usuário ao fechar o PWA.
+    // IndexedDB primeiro (mais robusto em PWA instalado), com localStorage
+    // como fallback pra navegadores/contextos sem IndexedDB.
+    auth = initializeAuth(garantirApp(), {
+      persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+      popupRedirectResolver: browserPopupRedirectResolver,
+    });
+  }
   return auth;
 }
 

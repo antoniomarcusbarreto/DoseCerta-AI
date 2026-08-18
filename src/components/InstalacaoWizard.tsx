@@ -1,14 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Share, SquarePlus, Smartphone, X } from 'lucide-react';
 import { Button } from '@/components/Button';
-import { rodandoComoPWAInstalado } from '@/features/auth/sessao';
+import { detectarIOS, rodandoComoPWAInstalado } from '@/features/auth/sessao';
 import { aoCapturarPrompt, limparPromptInstalacao, obterPromptInstalacao } from '@/lib/promptInstalacao';
 
 const CHAVE_DISPENSADO = 'instalacao-wizard-dispensado';
-
-function detectarIOS(): boolean {
-  return /iphone|ipad|ipod/i.test(navigator.userAgent);
-}
 
 type Plataforma = 'ios' | 'android' | null;
 

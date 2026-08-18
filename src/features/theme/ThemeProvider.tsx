@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '@/features/auth/AuthProvider';
-import { doc, getDoc, updateDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { getDb } from '@/lib/firebase';
 
 type Theme = 'menta-claro' | 'lavanda-clara' | 'oceano-escuro';
@@ -45,6 +45,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Aplica o tema na raiz do documento
     document.documentElement.setAttribute('data-theme', theme);
+    // Sem isso, navegar do app de paciente pro /painel (SPA, sem reload)
+    // deixaria o atributo do último tema escolhido grudado no <html>,
+    // vazando cor de paciente pro painel administrativo.
+    return () => document.documentElement.removeAttribute('data-theme');
   }, [theme]);
 
   const setTheme = async (newTheme: Theme) => {

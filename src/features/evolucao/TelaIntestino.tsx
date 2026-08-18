@@ -7,12 +7,8 @@ import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
 import { useDados } from '@/features/dados/DadosProvider';
-import {
-  consultaIntestinoRecentes,
-  criarRegistroIntestino,
-  excluirRegistroIntestino,
-} from '@/features/dados/repositorio';
-import { useColecao } from '@/lib/useConsulta';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
+import { criarRegistroIntestino, excluirRegistroIntestino } from '@/features/dados/repositorio';
 import type { TipoEvacuacao } from '@/domain/tipos';
 
 const IconeVoltar = () => (
@@ -44,11 +40,7 @@ export function TelaIntestino() {
   const navegar = useNavigate();
   const { uid } = useDados();
 
-  const consulta = uid ? consultaIntestinoRecentes(uid) : null;
-  const { dados: registros, carregando } = useColecao(
-    consulta,
-    uid ? `${uid}/bowel_logs/recentes` : null,
-  );
+  const { intestino: registros, intestinoCarregando: carregando } = useEvolucao();
 
   const [salvando, setSalvando] = useState<TipoEvacuacao | null>(null);
   const [erro, setErro] = useState<string | null>(null);

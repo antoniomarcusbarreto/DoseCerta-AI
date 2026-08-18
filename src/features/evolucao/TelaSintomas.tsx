@@ -8,12 +8,8 @@ import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
 import { useDados } from '@/features/dados/DadosProvider';
-import {
-  consultaSintomasUltimos7Dias,
-  criarRegistroSintoma,
-  excluirRegistroSintoma,
-} from '@/features/dados/repositorio';
-import { useColecao } from '@/lib/useConsulta';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
+import { criarRegistroSintoma, excluirRegistroSintoma } from '@/features/dados/repositorio';
 import type { IntensidadeSintoma } from '@/domain/tipos';
 
 const IconeVoltar = () => (
@@ -46,11 +42,7 @@ export function TelaSintomas() {
   const navegar = useNavigate();
   const { uid } = useDados();
 
-  const consulta = uid ? consultaSintomasUltimos7Dias(uid) : null;
-  const { dados: registros, carregando } = useColecao(
-    consulta,
-    uid ? `${uid}/symptom_logs/7dias` : null,
-  );
+  const { sintomas: registros, sintomasCarregando: carregando } = useEvolucao();
 
   const [sintomaSelecionado, setSintomaSelecionado] = useState<string | null>(null);
   const [sintomaOutro, setSintomaOutro] = useState('');

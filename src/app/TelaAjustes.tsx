@@ -6,6 +6,7 @@ import { SheetCard } from '@/components/SheetCard';
 import { formatarHorario, nomeDiaSemana } from '@/domain/datas';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { useDados } from '@/features/dados/DadosProvider';
+import { CardStatusNotificacoes } from '@/features/notificacoes/CardStatusNotificacoes';
 import { useTheme } from '@/features/theme/ThemeProvider';
 
 type Item = {
@@ -139,50 +140,54 @@ export function TelaAjustes() {
         </>
       }
     >
-      <SheetCard>
-        <ul className="divide-y" style={{ borderColor: 'var(--border-hair)' }}>
-          {itens.map((item) => {
-            const conteudo = (
-              <>
-                <div className="min-w-0">
-                  <p className="t-label text-ink">{item.titulo}</p>
-                  <p className="t-label mt-0.5 text-ink-muted">{item.descricao}</p>
-                </div>
-                {item.emBreve ? (
-                  <span className="t-caption shrink-0 text-ink-faint">em breve</span>
-                ) : (
-                  <span className="text-ink-muted">
-                    <IconeSeta />
-                  </span>
-                )}
-              </>
-            );
+      <div className="space-y-4">
+        <CardStatusNotificacoes />
 
-            return (
-              <li key={item.titulo}>
-                {item.para ? (
-                  <Link
-                    to={item.para}
-                    /* O realce de mouse acompanha exatamente a largura do
-                       divisor: com recuo negativo ele passaria por fora da
-                       linha e o alinhamento ficaria torto. */
-                    className="flex min-h-14 items-center justify-between gap-3 transition-colors hover:bg-sunken lg:min-h-16"
-                  >
-                    {conteudo}
-                  </Link>
-                ) : (
-                  <div
-                    className="flex min-h-14 items-center justify-between gap-3 py-3 opacity-60"
-                    aria-disabled="true"
-                  >
-                    {conteudo}
+        <SheetCard>
+          <ul className="divide-y" style={{ borderColor: 'var(--border-hair)' }}>
+            {itens.map((item) => {
+              const conteudo = (
+                <>
+                  <div className="min-w-0">
+                    <p className="t-label text-ink">{item.titulo}</p>
+                    <p className="t-label mt-0.5 text-ink-muted">{item.descricao}</p>
                   </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </SheetCard>
+                  {item.emBreve ? (
+                    <span className="t-caption shrink-0 text-ink-faint">em breve</span>
+                  ) : (
+                    <span className="text-ink-muted">
+                      <IconeSeta />
+                    </span>
+                  )}
+                </>
+              );
+
+              return (
+                <li key={item.titulo}>
+                  {item.para ? (
+                    <Link
+                      to={item.para}
+                      /* O realce de mouse acompanha exatamente a largura do
+                         divisor: com recuo negativo ele passaria por fora da
+                         linha e o alinhamento ficaria torto. */
+                      className="flex min-h-14 items-center justify-between gap-3 transition-colors hover:bg-sunken lg:min-h-16"
+                    >
+                      {conteudo}
+                    </Link>
+                  ) : (
+                    <div
+                      className="flex min-h-14 items-center justify-between gap-3 py-3 opacity-60"
+                      aria-disabled="true"
+                    >
+                      {conteudo}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </SheetCard>
+      </div>
     </Pagina>
   );
 }

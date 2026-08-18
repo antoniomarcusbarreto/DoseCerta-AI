@@ -252,16 +252,6 @@ export type PlanoAlimentar = {
   createdAt: Date;
 };
 
-/** Metas nutricionais provisórias, geradas por IA quando não há plano de nutricionista. */
-export type MetasNutricionais = {
-  proteinGoalG: number;
-  fiberGoalG: number;
-  kcalFloor: number;
-  suggestedMenu: string;
-  disclaimer: string;
-  generatedAt: Date;
-};
-
 export type PapelMensagemCopiloto = 'user' | 'assistant';
 
 /** Uma mensagem de uma sessão de chat com o Co-piloto de Hábitos (IA). */

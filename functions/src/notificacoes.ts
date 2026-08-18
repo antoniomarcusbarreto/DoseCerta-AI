@@ -11,7 +11,7 @@ const FUSO = 'America/Sao_Paulo';
  * remove da lista os tokens que o FCM reporta como mortos (desinstalado,
  * permissão revogada, etc.) — sem isso `fcmTokens` só cresce para sempre.
  */
-async function enviarParaUsuario(uid: string, titulo: string, corpo: string): Promise<number> {
+export async function enviarParaUsuario(uid: string, titulo: string, corpo: string): Promise<number> {
   const db = getFirestore();
   const docUsuario = db.collection('users').doc(uid);
   const snap = await docUsuario.get();
@@ -237,6 +237,141 @@ export const hidratacaoRetaFinal = onSchedule(
         usuario.id,
         '🏆 Quase lá!',
         `Faltam só ${faltam} ml para bater sua meta de hidratação hoje!`,
+      );
+    }
+  },
+);
+
+const PROTEINA_G_POR_KG = 1.35;
+const KCAL_POR_KG = 24;
+const PISO_KCAL_SEGURO = 1200;
+
+type MetasNutricao = { proteinGoalG: number; kcalGoal: number };
+
+/**
+ * Meta real vem do Plano Alimentar ativo (`diet_plans`, campo `0` = não
+ * definido). Na ausência de meta no plano, cai pro mesmo fallback por peso de
+ * `src/domain/refeicao.ts` (duplicado aqui pelo mesmo motivo de sempre:
+ * `functions/` não importa `src/`). `nutritionGoals` no doc do usuário não é
+ * usado — hoje nenhum fluxo da UI grava esse campo.
+ *
+ * Retorna `null` quando nem o plano nem o peso dão uma meta pra nenhum dos
+ * dois campos — nesse caso não há base pra comparar e o usuário é pulado.
+ */
+async function metasNutricaoDoUsuario(usuario: QueryDocumentSnapshot): Promise<MetasNutricao | null> {
+  const planoAtivo = await usuario.ref
+    .collection('diet_plans')
+    .where('isActive', '==', true)
+    .limit(1)
+    .get();
+
+  const proteinGoalPlano = planoAtivo.empty ? 0 : Number(planoAtivo.docs[0].data().proteinGoalG ?? 0);
+  const kcalGoalPlano = planoAtivo.empty ? 0 : Number(planoAtivo.docs[0].data().kcalGoal ?? 0);
+
+  let pesoKg: number | null = null;
+  if (proteinGoalPlano <= 0 || kcalGoalPlano <= 0) {
+    const ultimoPeso = await usuario.ref
+      .collection('weight_history')
+      .orderBy('recordedAt', 'desc')
+      .limit(1)
+      .get();
+    pesoKg = ultimoPeso.empty ? null : (ultimoPeso.docs[0].data().weight as number | undefined) ?? null;
+  }
+
+  const proteinGoalG =
+    proteinGoalPlano > 0 ? proteinGoalPlano : pesoKg ? Math.round(pesoKg * PROTEINA_G_POR_KG) : 0;
+  const kcalGoal =
+    kcalGoalPlano > 0 ? kcalGoalPlano : pesoKg ? Math.max(Math.round(pesoKg * KCAL_POR_KG), PISO_KCAL_SEGURO) : 0;
+
+  if (proteinGoalG <= 0 && kcalGoal <= 0) return null;
+  return { proteinGoalG, kcalGoal };
+}
+
+/**
+ * Soma `macros.protein`/`macros.kcal` das refeições confirmadas hoje.
+ * `macros` já é o valor proporcional real gravado na confirmação
+ * (`confirmarRefeicao` no cliente) — não multiplicar por `consumedPercentage`
+ * de novo, senão o consumo fica descontado em dobro.
+ */
+async function consumoNutricaoHoje(
+  userRef: FirebaseFirestore.DocumentReference,
+): Promise<{ protein: number; kcal: number }> {
+  const agora = new Date();
+  const inicio = Timestamp.fromDate(inicioDoDia(agora));
+  const fim = Timestamp.fromDate(fimDoDia(agora));
+
+  const snap = await userRef
+    .collection('meals')
+    .where('status', '==', 'completed')
+    .where('createdAt', '>=', inicio)
+    .where('createdAt', '<=', fim)
+    .get();
+
+  return snap.docs.reduce(
+    (total, doc) => {
+      const macros = doc.data().macros ?? {};
+      return {
+        protein: total.protein + Number(macros.protein ?? 0),
+        kcal: total.kcal + Number(macros.kcal ?? 0),
+      };
+    },
+    { protein: 0, kcal: 0 },
+  );
+}
+
+/**
+ * Diariamente às 16:00: consumo de proteína ou calorias abaixo de 50% da
+ * meta do dia recebe um empurrão para um lanche proteico.
+ */
+export const nutricaoAlertaTarde = onSchedule(
+  { schedule: '0 16 * * *', timeZone: FUSO, region: REGIAO },
+  async () => {
+    const db = getFirestore();
+    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+
+    for (const usuario of usuarios.docs) {
+      const metas = await metasNutricaoDoUsuario(usuario);
+      if (!metas) continue;
+
+      const consumo = await consumoNutricaoHoje(usuario.ref);
+      const proteinaBaixa = metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.5;
+      const caloriasBaixas = metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.5;
+      if (!proteinaBaixa && !caloriasBaixas) continue;
+
+      await enviarParaUsuario(
+        usuario.id,
+        '🍗 Proteja sua massa muscular!',
+        'Seu consumo de nutrientes está baixo hoje. Que tal um lanche proteico agora à tarde?',
+      );
+    }
+  },
+);
+
+/**
+ * Diariamente às 20:00: última chamada do dia — dispara se a proteína
+ * estiver abaixo de 80% da meta, ou as calorias abaixo de 80% da meta, ou
+ * abaixo do piso de segurança absoluto (1200kcal), independente da meta.
+ */
+export const nutricaoRetaFinal = onSchedule(
+  { schedule: '0 20 * * *', timeZone: FUSO, region: REGIAO },
+  async () => {
+    const db = getFirestore();
+    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+
+    for (const usuario of usuarios.docs) {
+      const metas = await metasNutricaoDoUsuario(usuario);
+      if (!metas) continue;
+
+      const consumo = await consumoNutricaoHoje(usuario.ref);
+      const proteinaBaixa = metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.8;
+      const caloriasCriticas =
+        (metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.8) || consumo.kcal < PISO_KCAL_SEGURO;
+      if (!proteinaBaixa && !caloriasCriticas) continue;
+
+      await enviarParaUsuario(
+        usuario.id,
+        '🥗 Ainda dá tempo de nutrir seu corpo hoje!',
+        'Faltam poucas proteínas para sua meta. Um jantar equilibrado faz toda a diferença.',
       );
     }
   },

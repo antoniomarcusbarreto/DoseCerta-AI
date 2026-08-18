@@ -9,8 +9,8 @@ import { useConfirm } from '@/contexts/ConfirmContext';
 import type { RegistroRefeicao } from '@/domain/tipos';
 import { CardRefeicao } from '@/features/evolucao/CardRefeicao';
 import { useDados } from '@/features/dados/DadosProvider';
-import { consultaTodasRefeicoesConcluidas, excluirRefeicao } from '@/features/dados/repositorio';
-import { useColecao } from '@/lib/useConsulta';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
+import { excluirRefeicao } from '@/features/dados/repositorio';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -43,10 +43,7 @@ export function TelaHistoricoRefeicoes() {
   const { askConfirm } = useConfirm();
   const [erro, setErro] = useState<string | null>(null);
 
-  const refeicoes = useColecao(
-    uid ? consultaTodasRefeicoesConcluidas(uid) : null,
-    uid ? `${uid}/meals-historico` : null,
-  );
+  const { refeicoesTodas, erro: erroEvolucao } = useEvolucao();
 
   function handleDeleteMeal(mealId: string, storagePath: string) {
     if (!uid) return;
@@ -66,7 +63,7 @@ export function TelaHistoricoRefeicoes() {
     });
   }
 
-  const grupos = agruparPorData(refeicoes.dados);
+  const grupos = agruparPorData(refeicoesTodas);
 
   return (
     <Pagina
@@ -85,14 +82,14 @@ export function TelaHistoricoRefeicoes() {
       }
     >
       {erro ? <Alerta tom="danger" titulo="Ops">{erro}</Alerta> : null}
-      {!erro && refeicoes.erro ? (
+      {!erro && erroEvolucao ? (
         <Alerta tom="danger" titulo="Não foi possível carregar seu histórico">
-          {refeicoes.erro.message}
+          {erroEvolucao.message}
         </Alerta>
       ) : null}
 
-      <SheetCard titulo="Todas as refeições" subtitulo={`${refeicoes.dados.length} no total`}>
-        {refeicoes.dados.length === 0 ? (
+      <SheetCard titulo="Todas as refeições" subtitulo={`${refeicoesTodas.length} no total`}>
+        {refeicoesTodas.length === 0 ? (
           <p className="t-body text-ink-muted">Nenhuma refeição registrada ainda.</p>
         ) : (
           <div className="flex flex-col gap-4">

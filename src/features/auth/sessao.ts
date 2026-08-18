@@ -58,6 +58,16 @@ export function rodandoComoPWAInstalado(): boolean {
   return window.matchMedia?.('(display-mode: standalone)').matches || standaloneIOS;
 }
 
+/** iPhone/iPad/iPod — usado junto com `rodandoComoPWAInstalado` porque no iOS a Push API só existe em modo standalone. */
+export function detectarIOS(): boolean {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+/** Celular Android — o resto (desktop Windows/Mac/Linux) cai no caso "web". */
+export function detectarAndroid(): boolean {
+  return /android/i.test(navigator.userAgent);
+}
+
 /**
  * Limpa todo o rastro local da sessão. Reaproveitado tanto pelo logout manual
  * quanto pela detecção de sessão morta — precisam ser o mesmo teardown.

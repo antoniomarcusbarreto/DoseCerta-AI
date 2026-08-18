@@ -11,6 +11,7 @@ import {
 import {
   createUserWithEmailAndPassword,
   EmailAuthProvider,
+  getIdTokenResult,
   getRedirectResult,
   GoogleAuthProvider,
   linkWithCredential,
@@ -26,8 +27,10 @@ import {
   type User,
 } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
+import { onSnapshot } from 'firebase/firestore';
 import { getAuthCliente, getFunctionsCliente, getGoogleProvider, firebaseConfigurado } from '@/lib/firebase';
 import { garantirPerfil } from '@/features/dados/repositorio';
+import { refEstadoConta } from '@/lib/firestore';
 import { limparEstadoLocal, rodandoComoPWAInstalado, validarSessao } from './sessao';
 
 /** Conflito detectado: já existe conta com este e-mail por outro método de login. */
@@ -36,6 +39,10 @@ type VinculoPendente = { email: string; credencial: AuthCredential };
 type AuthContexto = {
   usuario: User | null;
   carregando: boolean;
+  /** `true` quando a sessão atual é a do painel administrativo (custom claim `admin`). */
+  ehAdmin: boolean;
+  /** `true` enquanto o claim de admin do usuário atual ainda está sendo lido. */
+  carregandoClaims: boolean;
   /** Preenchido quando a sessão caiu sozinha, para explicar o porquê no login. */
   motivoSaida: string | null;
   /** Preenchido quando o login por Google esbarra num e-mail já cadastrado por senha. */
@@ -81,19 +88,51 @@ const Contexto = createContext<AuthContexto | null>(null);
 const MSG_SESSAO_ENCERRADA =
   'Sua sessão foi encerrada porque esta conta não está mais ativa. Entre novamente.';
 
+const MSG_CONTA_SUSPENSA = 'Sua conta foi suspensa. Entre em contato com o suporte.';
+
 const MSG_SENHA_ALTERADA = 'Senha alterada com sucesso. Faça login novamente.';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [usuario, setUsuario] = useState<User | null>(null);
   const [carregando, setCarregando] = useState(firebaseConfigurado);
+  const [ehAdmin, setEhAdmin] = useState(false);
+  const [carregandoClaims, setCarregandoClaims] = useState(firebaseConfigurado);
   const [motivoSaida, setMotivoSaida] = useState<string | null>(null);
   const [vinculoPendente, setVinculoPendente] = useState<VinculoPendente | null>(null);
   const usuarioRef = useRef<User | null>(null);
 
   usuarioRef.current = usuario;
 
-  const derrubarSessao = useCallback(async () => {
-    setMotivoSaida(MSG_SESSAO_ENCERRADA);
+  /*
+   * O claim `admin` só existe na sessão sintética do painel (/painel) — é o
+   * que diferencia essa sessão de um paciente comum sem depender de nenhum
+   * doc em `users/`. Recalcula sempre que a sessão muda.
+   */
+  useEffect(() => {
+    if (!usuario) {
+      setEhAdmin(false);
+      setCarregandoClaims(false);
+      return;
+    }
+    let cancelado = false;
+    setCarregandoClaims(true);
+    getIdTokenResult(usuario)
+      .then((resultado) => {
+        if (!cancelado) setEhAdmin(resultado.claims.admin === true);
+      })
+      .catch(() => {
+        if (!cancelado) setEhAdmin(false);
+      })
+      .finally(() => {
+        if (!cancelado) setCarregandoClaims(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [usuario]);
+
+  const derrubarSessao = useCallback(async (mensagem: string = MSG_SESSAO_ENCERRADA) => {
+    setMotivoSaida(mensagem);
     try {
       await signOut(getAuthCliente());
     } catch {
@@ -140,6 +179,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [derrubarSessao]);
 
   /*
+   * Kickout em tempo real: sem isto, uma conta bloqueada no painel admin
+   * continua com acesso total até o ID token expirar sozinho (até 1h) ou o
+   * app voltar ao primeiro plano (efeito acima). O doc `estado/conta` é
+   * escrito só pela Cloud Function `adminDefinirBloqueio` via Admin SDK —
+   * ver `firestore.rules` — então o próprio cliente não tem como reverter.
+   */
+  useEffect(() => {
+    if (!firebaseConfigurado || !usuario) return;
+
+    const cancelar = onSnapshot(refEstadoConta(usuario.uid), (snap) => {
+      if (snap.data()?.bloqueado) void derrubarSessao(MSG_CONTA_SUSPENSA);
+    });
+
+    return cancelar;
+  }, [usuario, derrubarSessao]);
+
+  /*
    * Em PWA instalado, `entrarComGoogle` navega embora via `signInWithRedirect`
    * em vez de abrir popup — o resultado só chega quando a página volta a
    * carregar, então precisa ser coletado uma vez no boot.
@@ -159,6 +215,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
   }, []);
 
+  /*
+   * TODO (estudo): desbloqueio biométrico via Passkeys/WebAuthn.
+   *
+   * O Firebase Auth não verifica assertions WebAuthn nativamente, então a
+   * abordagem seria:
+   * 1. Cadastro da passkey: no dispositivo já logado, chamar
+   *    `navigator.credentials.create({ publicKey: ... })` (checar suporte
+   *    antes com `window.PublicKeyCredential`) e mandar a credencial pública
+   *    resultante pra uma Cloud Function, que a guarda associada ao `uid`
+   *    (ex.: `users/{uid}/estado/passkeys`, mesmo padrão de doc
+   *    "admin-only" usado para o bloqueio de conta acima).
+   * 2. Login: chamar `navigator.credentials.get({ publicKey: ... })`, mandar
+   *    a assertion pra uma Cloud Function que verifica a assinatura contra a
+   *    credencial cadastrada e, se válida, gera um custom token
+   *    (`getAuth().createCustomToken(uid)`).
+   * 3. No cliente, trocar esse custom token por uma sessão real com
+   *    `signInWithCustomToken(getAuthCliente(), token)` — substituindo a
+   *    digitação de senha nos acessos seguintes.
+   */
   const entrar = useCallback(async (email: string, senha: string) => {
     setMotivoSaida(null);
     await signInWithEmailAndPassword(getAuthCliente(), email, senha);
@@ -265,6 +340,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       usuario,
       carregando,
+      ehAdmin,
+      carregandoClaims,
       motivoSaida,
       vinculoPendente,
       entrar,
@@ -280,6 +357,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       usuario,
       carregando,
+      ehAdmin,
+      carregandoClaims,
       motivoSaida,
       vinculoPendente,
       entrar,

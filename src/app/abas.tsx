@@ -26,7 +26,7 @@ const traco = {
  */
 export const ABAS: Aba[] = [
   {
-    para: '/',
+    para: '/inicio',
     rotulo: 'Início',
     exato: true,
     icone: (

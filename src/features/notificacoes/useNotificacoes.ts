@@ -3,6 +3,7 @@ import { getToken, onMessage, type MessagePayload } from 'firebase/messaging';
 import { getMessagingCliente } from '@/lib/firebase';
 import { salvarTokenFcm } from '@/lib/firestore';
 import { useAuth } from '@/features/auth/AuthProvider';
+import { detectarIOS, rodandoComoPWAInstalado } from '@/features/auth/sessao';
 
 const MENSAGEM_SEM_SUPORTE = 'Este navegador não suporta notificações push.';
 const MENSAGEM_NEGADA = 'Você negou a permissão de notificações. Habilite pelas configurações do navegador.';
@@ -24,6 +25,11 @@ export function useNotificacoes() {
   const [permissao, setPermissao] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'denied',
   );
+  // No iOS, a Push API só existe com o app instalado (modo standalone) —
+  // fora disso, pedir permissão fica num estado que nem sempre erra, só não
+  // funciona de verdade. Melhor nem tentar do que deixar o usuário achando
+  // que habilitou.
+  const [precisaInstalar] = useState(() => detectarIOS() && !rodandoComoPWAInstalado());
   const [habilitando, setHabilitando] = useState(false);
   const [tokenSalvo, setTokenSalvo] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -48,7 +54,7 @@ export function useNotificacoes() {
   }, []);
 
   const habilitar = useCallback(async () => {
-    if (!usuario) return;
+    if (!usuario || precisaInstalar) return;
     if (typeof Notification === 'undefined') {
       setErro(MENSAGEM_SEM_SUPORTE);
       return;
@@ -86,7 +92,7 @@ export function useNotificacoes() {
     } finally {
       setHabilitando(false);
     }
-  }, [usuario]);
+  }, [usuario, precisaInstalar]);
 
-  return { permissao, habilitando, tokenSalvo, erro, ultimaMensagem, habilitar };
+  return { permissao, precisaInstalar, habilitando, tokenSalvo, erro, ultimaMensagem, habilitar };
 }

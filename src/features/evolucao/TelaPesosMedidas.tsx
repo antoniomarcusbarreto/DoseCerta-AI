@@ -10,14 +10,10 @@ import { SheetCard } from '@/components/SheetCard';
 import { calcularMetaHidratacao } from '@/domain/hidratacao';
 import { calcularImc, deltaPeso } from '@/domain/medidas';
 import { useDados } from '@/features/dados/DadosProvider';
-import {
-  atualizarAltura,
-  atualizarMetaHidratacao,
-  consultaHistoricoPeso,
-  criarRegistroPeso,
-} from '@/features/dados/repositorio';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
+import { atualizarAltura, atualizarMetaHidratacao, criarRegistroPeso } from '@/features/dados/repositorio';
 import { refUsuario } from '@/lib/firestore';
-import { useColecao, useDocumento } from '@/lib/useConsulta';
+import { useDocumento } from '@/lib/useConsulta';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -51,11 +47,11 @@ export function TelaPesosMedidas() {
   const refUsuarioAtual = uid ? refUsuario(uid) : null;
   const { dados: usuario, carregando: carregandoAltura } = useDocumento(refUsuarioAtual);
 
-  const consulta = uid ? consultaHistoricoPeso(uid, 5) : null;
-  const { dados: historico, carregando: carregandoHistorico } = useColecao(
-    consulta,
-    uid ? `${uid}/weight_history` : null,
-  );
+  const { historicoPeso, historicoPesoCarregando: carregandoHistorico } = useEvolucao();
+  // O provider já busca as 30 últimas pesagens (ordenadas do mais recente ao
+  // mais antigo) para o gráfico de evolução; esta lista só mostra as 5 mais
+  // recentes, então reaproveita o mesmo listener em vez de abrir outro.
+  const historico = historicoPeso.slice(0, 5);
 
   const alturaSalva = usuario?.height ?? null;
   const precisaAltura = !carregandoAltura && alturaSalva === null;

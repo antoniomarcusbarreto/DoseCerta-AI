@@ -10,12 +10,8 @@ import { SheetCard } from '@/components/SheetCard';
 import { useConfirm } from '@/contexts/ConfirmContext';
 import type { AnguloFoto, RegistroFoto } from '@/domain/tipos';
 import { useDados } from '@/features/dados/DadosProvider';
-import {
-  consultaFotosProgresso,
-  excluirFotoProgresso,
-  uploadFotoProgresso,
-} from '@/features/dados/repositorio';
-import { useColecao } from '@/lib/useConsulta';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
+import { excluirFotoProgresso, uploadFotoProgresso } from '@/features/dados/repositorio';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -59,11 +55,7 @@ export function TelaGaleria() {
   const { askConfirm } = useConfirm();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const consulta = uid ? consultaFotosProgresso(uid) : null;
-  const { dados: fotos, carregando } = useColecao(
-    consulta,
-    uid ? `${uid}/progress_photos` : null,
-  );
+  const { fotos, fotosCarregando: carregando } = useEvolucao();
 
   const [angulo, setAngulo] = useState<AnguloFoto>('Frente');
   const [isUploading, setIsUploading] = useState(false);

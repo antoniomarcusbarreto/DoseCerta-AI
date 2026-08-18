@@ -43,10 +43,10 @@ import type {
   Aplicacao,
   MacrosRefeicao,
   Medicamento,
-  MetasNutricionais,
   Perfil,
   PlanoAlimentar,
   Protocolo,
+  Refeicao,
   RegistroFoto,
   RegistroHidratacao,
   RegistroIntestino,
@@ -60,6 +60,18 @@ import type {
  *
  * Regra da casa: nenhuma regra de negócio mora aqui. Este módulo orquestra
  * `src/domain` e o Firestore; o cálculo em si é sempre da função pura.
+ *
+ * Invariante que mantém DadosProvider/DadosEvolucaoProvider sempre em dia sem
+ * nenhuma sincronização manual: toda escrita aqui usa `new Date()` (nunca
+ * `serverTimestamp()`) em qualquer campo usado por `orderBy`/`where` das
+ * consultas em tempo real. O SDK do Firestore aplica escritas pendentes ao
+ * cache local antes da confirmação do servidor — os listeners `onSnapshot`
+ * dos providers já recebem o valor novo na hora, desde que o cache local
+ * consiga avaliar os filtros da query contra o dado escrito. `serverTimestamp()`
+ * grava `null` localmente até o servidor responder, então um campo assim
+ * usado em `orderBy`/`where` faria o documento sumir ou desordenar na tela até
+ * o round-trip completar — reintroduzindo exatamente o "stale data" que este
+ * padrão existe para evitar.
  */
 
 export async function garantirPerfil(uid: string, nome: string): Promise<void> {
@@ -296,28 +308,6 @@ export async function atualizarMetaHidratacao(
   );
 }
 
-/**
- * Gera o Plano Provisório Inteligente via IA a partir do peso atual e já
- * salva o resultado no documento do usuário. Peso é responsabilidade de quem
- * chama (ex.: último registro de `weight_history`) — esta função só orquestra
- * a chamada à Cloud Function e a escrita.
- */
-export async function gerarESalvarMetasNutricionais(
-  uid: string,
-  weightKg: number,
-): Promise<MetasNutricionais> {
-  const chamar = httpsCallable<{ weightKg: number }, Omit<MetasNutricionais, 'generatedAt'>>(
-    getFunctionsCliente(),
-    'gerarPlanoNutricionalAI',
-  );
-
-  const { data } = await chamar({ weightKg });
-  const metas: MetasNutricionais = { ...data, generatedAt: new Date() };
-
-  await setDoc(refUsuario(uid), { nutritionGoals: metas }, { merge: true });
-  return metas;
-}
-
 export type NovoRegistroSintoma = Omit<RegistroSintoma, 'id'>;
 
 export async function criarRegistroSintoma(
@@ -406,6 +396,29 @@ export async function criarPlanoAlimentar(uid: string, novo: NovoPlanoAlimentar)
 
 export async function excluirPlanoAlimentar(uid: string, planoId: string): Promise<void> {
   await deleteDoc(doc(colPlanosAlimentares(uid), planoId));
+}
+
+/**
+ * Gera um plano provisório via IA a partir do peso informado e já cria/ativa
+ * como Plano Alimentar — reaproveita `criarPlanoAlimentar` por inteiro, então
+ * herda de graça o arquivamento dos outros planos, o preenchimento de metas
+ * por peso e a sincronia com a meta de hidratação.
+ */
+export async function gerarPlanoAlimentarComIA(uid: string, weightKg: number): Promise<string> {
+  const chamar = httpsCallable<{ weightKg: number }, { title: string; meals: Refeicao[] }>(
+    getFunctionsCliente(),
+    'gerarPlanoAlimentarIA',
+  );
+  const { data } = await chamar({ weightKg });
+
+  return criarPlanoAlimentar(uid, {
+    title: data.title,
+    isActive: true,
+    meals: data.meals,
+    proteinGoalG: 0,
+    kcalGoal: 0,
+    waterGoalMl: 0,
+  });
 }
 
 export async function atualizarPlanoAlimentar(

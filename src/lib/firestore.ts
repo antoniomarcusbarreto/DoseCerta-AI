@@ -20,7 +20,6 @@ import type {
   MensagemCopiloto,
   Medicamento,
   Medida,
-  MetasNutricionais,
   Perfil,
   PlanoAlimentar,
   Protocolo,
@@ -404,7 +403,6 @@ type CampoUsuario = {
   height: number | null;
   hydration_goal: number | null;
   metaEditadaManualmente: boolean;
-  nutritionGoals: MetasNutricionais | null;
 };
 
 const conversorCampoUsuario: FirestoreDataConverter<CampoUsuario, DocumentData> = {
@@ -416,10 +414,6 @@ const conversorCampoUsuario: FirestoreDataConverter<CampoUsuario, DocumentData> 
     if (u.height !== undefined) dados.height = u.height;
     if (u.hydration_goal !== undefined) dados.hydration_goal = u.hydration_goal;
     if (u.metaEditadaManualmente !== undefined) dados.metaEditadaManualmente = u.metaEditadaManualmente;
-    if (u.nutritionGoals !== undefined) {
-      const metas = u.nutritionGoals as MetasNutricionais | null;
-      dados.nutritionGoals = metas ? { ...metas, generatedAt: paraTimestamp(metas.generatedAt) } : null;
-    }
     return dados;
   },
   fromFirestore: (snap) => {
@@ -429,16 +423,6 @@ const conversorCampoUsuario: FirestoreDataConverter<CampoUsuario, DocumentData> 
       hydration_goal: d.hydration_goal ?? null,
       // Contas antigas não têm o campo ainda: ausência = geração automática.
       metaEditadaManualmente: Boolean(d.metaEditadaManualmente ?? false),
-      nutritionGoals: d.nutritionGoals
-        ? {
-            proteinGoalG: Number(d.nutritionGoals.proteinGoalG ?? 0),
-            fiberGoalG: Number(d.nutritionGoals.fiberGoalG ?? 0),
-            kcalFloor: Number(d.nutritionGoals.kcalFloor ?? 0),
-            suggestedMenu: String(d.nutritionGoals.suggestedMenu ?? ''),
-            disclaimer: String(d.nutritionGoals.disclaimer ?? ''),
-            generatedAt: paraData(d.nutritionGoals.generatedAt) ?? new Date(),
-          }
-        : null,
     };
   },
 };
@@ -457,6 +441,23 @@ export const salvarTokenFcm = (uid: string, token: string) =>
 
 export const refPerfil = (uid: string) =>
   doc(getDb(), 'users', uid, 'meta', 'perfil').withConverter(conversorPerfil);
+
+type EstadoConta = {
+  bloqueado: boolean;
+};
+
+const conversorEstadoConta: FirestoreDataConverter<EstadoConta, DocumentData> = {
+  // Nunca escrito pelo cliente — as regras do Firestore bloqueiam isso.
+  toFirestore: () => ({}),
+  fromFirestore: (snap) => ({
+    // Ausência do doc = conta nunca tocada pelo painel admin, ou seja, não bloqueada.
+    bloqueado: Boolean(snap.data()?.bloqueado ?? false),
+  }),
+};
+
+/** Espelho somente-leitura do bloqueio de conta (Auth `disabled`), pra permitir assinar em tempo real. */
+export const refEstadoConta = (uid: string) =>
+  doc(getDb(), 'users', uid, 'estado', 'conta').withConverter(conversorEstadoConta);
 
 /**
  * Doc denormalizado que a Cloud Function de lembretes varre com uma única

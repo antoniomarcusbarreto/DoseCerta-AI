@@ -9,9 +9,9 @@ import {
 } from "recharts";
 import type { TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
+import type { ContentType } from "recharts/types/component/Tooltip";
 import { useDados } from "@/features/dados/DadosProvider";
-import { consultaHistoricoPeso } from "@/features/dados/repositorio";
-import { useColecao } from "@/lib/useConsulta";
+import { useEvolucao } from "@/features/dados/DadosEvolucaoProvider";
 import type { Aplicacao, RegistroPeso } from "@/domain/tipos";
 
 export type PontoEvolucaoPeso = {
@@ -150,16 +150,17 @@ type GraficoEvolucaoPesoProps = {
 };
 
 export function GraficoEvolucaoPeso({ dados }: GraficoEvolucaoPesoProps) {
-  const { uid, aplicacoes } = useDados();
-  const consulta = uid ? consultaHistoricoPeso(uid, 30) : null;
-  const { dados: historico, carregando } = useColecao(
-    consulta,
-    uid ? `${uid}/weight_history/grafico-evolucao` : null,
-  );
+  const { aplicacoes } = useDados();
+  const { historicoPeso: historico, historicoPesoCarregando: carregando } = useEvolucao();
 
   const dadosGrafico = dados ?? montarDadosGrafico(historico, aplicacoes);
 
-  if (dados === undefined && carregando) {
+  // `carregando` só deve travar a tela na primeira visita da sessão, antes do
+  // provider ter qualquer dado em memória. Depois disso ele fica `false` para
+  // sempre (o listener nunca é refeito ao trocar de aba), mas essa checagem
+  // extra em `historico` blinda contra qualquer re-render intermediário do
+  // provider mostrar o esqueleto por cima de um gráfico que já tem dado.
+  if (dados === undefined && carregando && historico.length === 0) {
     return (
       <div
         className="animate-pulse"
@@ -216,7 +217,14 @@ export function GraficoEvolucaoPeso({ dados }: GraficoEvolucaoPesoProps) {
         {/* `data` já é montada como DD/MM (ver `montarDadosGrafico`); o
             formatter aqui garante que nenhum outro formato (com hora) escape
             para o tooltip, mesmo que a origem do rótulo mude no futuro. */}
-        <Tooltip content={TooltipEvolucao} labelFormatter={(rotulo: string) => rotulo.slice(0, 5)} />
+        <Tooltip
+          content={TooltipEvolucao as unknown as ContentType<ValueType, NameType>}
+          labelFormatter={(rotulo) => (typeof rotulo === 'string' ? rotulo.slice(0, 5) : rotulo)}
+        />
+        {/* Sem isso, o Recharts redesenha a linha do zero (a animação padrão de
+            entrada) toda vez que este componente remonta — ou seja, toda vez
+            que a pessoa troca de aba e volta para a Início, mesmo com o dado
+            já em memória. Isso lia como um "recarregando" falso. */}
         <Line
           type="monotone"
           dataKey="peso"
@@ -224,6 +232,7 @@ export function GraficoEvolucaoPeso({ dados }: GraficoEvolucaoPesoProps) {
           strokeWidth={3}
           dot={<DotInjecao />}
           activeDot={{ r: 8, fill: COR_LINHA, strokeWidth: 0 }}
+          isAnimationActive={false}
         />
       </LineChart>
     </ResponsiveContainer>

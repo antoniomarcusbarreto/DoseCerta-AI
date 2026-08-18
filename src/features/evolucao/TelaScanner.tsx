@@ -13,11 +13,10 @@ import { useConfirm } from '@/contexts/ConfirmContext';
 import type { ItemRefeicaoIA, MacrosRefeicao } from '@/domain/tipos';
 import { CardRefeicao } from '@/features/evolucao/CardRefeicao';
 import { useDados } from '@/features/dados/DadosProvider';
+import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
 import {
   atualizarItensRefeicaoPendente,
   confirmarRefeicao,
-  consultaPlanosAlimentares,
-  consultaRefeicoesDeHojeConcluidas,
   criarRefeicaoPendente,
   descartarRefeicaoPendente,
   excluirRefeicao,
@@ -25,7 +24,7 @@ import {
 } from '@/features/dados/repositorio';
 import { getFunctionsCliente } from '@/lib/firebase';
 import { colRefeicoes, conversorRegistroRefeicao } from '@/lib/firestore';
-import { useColecao, useDocumento } from '@/lib/useConsulta';
+import { useDocumento } from '@/lib/useConsulta';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -64,23 +63,15 @@ export function TelaScanner() {
   const [erro, setErro] = useState<string | null>(null);
   const [itensEmEdicao, setItensEmEdicao] = useState<ItemRefeicaoIA[]>([]);
 
-  const planos = useColecao(
-    uid ? consultaPlanosAlimentares(uid) : null,
-    uid ? `${uid}/diet_plans` : null,
-  );
-  const planoAtivo = planos.dados.find((p) => p.isActive) ?? null;
+  const { planos, refeicoesHoje: refeicoesDeHoje, erro: erroEvolucao } = useEvolucao();
+  const planoAtivo = planos.find((p) => p.isActive) ?? null;
 
   const pendingMealDoc = useDocumento(
     uid && pendingMealId ? doc(colRefeicoes(uid), pendingMealId).withConverter(conversorRegistroRefeicao) : null,
   );
   const pendingMeal = pendingMealDoc.dados;
 
-  const refeicoesDeHoje = useColecao(
-    uid ? consultaRefeicoesDeHojeConcluidas(uid) : null,
-    uid ? `${uid}/meals-hoje` : null,
-  );
-
-  const erroConsulta = planos.erro ?? pendingMealDoc.erro ?? refeicoesDeHoje.erro ?? null;
+  const erroConsulta = erroEvolucao ?? pendingMealDoc.erro ?? null;
 
   useEffect(() => {
     if (pendingMealId) {
@@ -362,11 +353,11 @@ export function TelaScanner() {
 
       <SheetCard titulo="Refeições de Hoje">
         <div className="flex flex-col gap-3">
-          {refeicoesDeHoje.dados.length === 0 ? (
+          {refeicoesDeHoje.length === 0 ? (
             <p className="t-label text-ink-muted">Nenhuma refeição registrada hoje.</p>
           ) : (
             <ul className="divide-y" style={{ borderColor: 'var(--border-hair)' }}>
-              {refeicoesDeHoje.dados.map((refeicao) => (
+              {refeicoesDeHoje.map((refeicao) => (
                 <CardRefeicao key={refeicao.id} refeicao={refeicao} onExcluir={handleDeleteMeal} />
               ))}
             </ul>

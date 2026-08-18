@@ -1,26 +1,15 @@
 import type { ReactNode } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/features/auth/AuthProvider';
-
-/** Splash em gradiente enquanto o Firebase decide se há sessão. */
-function Carregando() {
-  return (
-    <div
-      className="grid min-h-dvh place-items-center"
-      style={{ background: 'linear-gradient(180deg, var(--hero-0) 0%, var(--hero-1) 100%)' }}
-      role="status"
-      aria-label="Carregando"
-    >
-      <p className="t-caption text-on-hero-muted">DoseCerta</p>
-    </div>
-  );
-}
+import { Carregando } from '@/components/Carregando';
 
 export function AuthGate({ children }: { children: ReactNode }) {
-  const { usuario, carregando } = useAuth();
+  const { usuario, carregando, ehAdmin, carregandoClaims } = useAuth();
   const local = useLocation();
 
-  if (carregando) return <Carregando />;
+  if (carregando || carregandoClaims) return <Carregando />;
   if (!usuario) return <Navigate to="/entrar" replace state={{ de: local.pathname }} />;
+  // Sessão do painel administrativo não tem doc em `users/` — não pode cair aqui.
+  if (ehAdmin) return <Navigate to="/painel" replace />;
   return <>{children}</>;
 }
