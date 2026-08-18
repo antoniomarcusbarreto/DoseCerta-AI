@@ -305,6 +305,8 @@ const esquemaAnaliseRefeicao = {
 // tem o download da foto do Storage antes da chamada. Texto é bem mais leve.
 const TIMEOUT_GEMINI_FOTO_MS = 20_000;
 const TIMEOUT_GEMINI_TEXTO_MS = 12_000;
+// Duas fotos em vez de uma — mais tokens de imagem, mais tempo de inferência.
+const TIMEOUT_GEMINI_COMPARACAO_MS = 25_000;
 
 /**
  * Corre `promessa` contra um cronômetro: se `promessa` não resolver dentro de
@@ -500,6 +502,111 @@ export const analisarDescricaoRefeicaoIA = onCall(
       });
       if (falha instanceof HttpsError) throw falha;
       throw new HttpsError('internal', 'Não foi possível analisar a descrição. Tente novamente.');
+    }
+  },
+);
+
+type AnaliseComparacaoExtraida = { analysis: string };
+
+const esquemaComparacaoFotos = {
+  type: Type.OBJECT,
+  properties: {
+    analysis: {
+      type: Type.STRING,
+      description:
+        'Feedback motivacional curto (2-4 frases, em português, pode usar emoji) comparando a foto ' +
+        '"antes" com a "depois", destacando mudanças visuais perceptíveis (postura, inchaço, definição, ' +
+        'caimento de roupas etc.). Se não houver mudança perceptível, seja honesto mas encorajador.',
+    },
+  },
+  required: ['analysis'],
+};
+
+/**
+ * Compara duas fotos de progresso (antes/depois) via Gemini Vision e gera um
+ * feedback motivacional. Mesma lógica de timeout/log de `analisarRefeicaoIA`
+ * — só troca a entrada (duas fotos em vez de uma) e o prompt.
+ */
+export const analisarComparacaoFotosIA = onCall(
+  { secrets: [geminiApiKey], region: 'southamerica-east1', cors: true, timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'É necessário estar logado.');
+    }
+
+    const uid = request.auth.uid;
+    const { beforeStoragePath, afterStoragePath } = request.data as {
+      beforeStoragePath?: string;
+      afterStoragePath?: string;
+    };
+
+    if (!beforeStoragePath || !afterStoragePath) {
+      throw new HttpsError('invalid-argument', 'beforeStoragePath e afterStoragePath são obrigatórios.');
+    }
+    const prefixoEsperado = `users/${uid}/progress_photos/`;
+    if (!beforeStoragePath.startsWith(prefixoEsperado) || !afterStoragePath.startsWith(prefixoEsperado)) {
+      throw new HttpsError('permission-denied', 'Caminho de imagem inválido.');
+    }
+
+    const genAI = new GoogleGenAI({ apiKey: geminiApiKey.value() });
+    const prompt =
+      'Compare estas duas fotos de progresso corporal de um usuário em tratamento (a primeira é "antes", ' +
+      'a segunda é "depois"). Identifique mudanças visuais perceptíveis — inchaço, postura, definição ' +
+      'corporal, caimento de roupas — e escreva um feedback motivacional curto sobre a evolução.';
+
+    const inicio = Date.now();
+    try {
+      const bucket = getStorage().bucket();
+      const [[bufferAntes], [bufferDepois]] = await Promise.all([
+        bucket.file(beforeStoragePath).download(),
+        bucket.file(afterStoragePath).download(),
+      ]);
+
+      const resposta = await comTimeout(
+        genAI.models.generateContent({
+          model: geminiModel.value(),
+          contents: [
+            { text: prompt },
+            { text: 'Foto ANTES:' },
+            { inlineData: { mimeType: 'image/jpeg', data: bufferAntes.toString('base64') } },
+            { text: 'Foto DEPOIS:' },
+            { inlineData: { mimeType: 'image/jpeg', data: bufferDepois.toString('base64') } },
+          ],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: esquemaComparacaoFotos,
+          },
+        }),
+        TIMEOUT_GEMINI_COMPARACAO_MS,
+      );
+
+      const texto = resposta.text;
+      if (!texto) {
+        throw new HttpsError('internal', 'A IA não retornou conteúdo.');
+      }
+
+      const extraido = JSON.parse(texto) as AnaliseComparacaoExtraida;
+      if (!extraido.analysis) {
+        throw new HttpsError('internal', 'Resposta da IA em formato inesperado.');
+      }
+
+      return extraido;
+    } catch (falha) {
+      const duracaoMs = Date.now() - inicio;
+      const foiTimeout = falha instanceof HttpsError && falha.code === 'deadline-exceeded';
+      console.error('[analisarComparacaoFotosIA] falha ao comparar fotos via Gemini', {
+        uid,
+        beforeStoragePath,
+        afterStoragePath,
+        duracaoMs,
+        timeout: foiTimeout,
+        erro:
+          falha instanceof Error
+            ? { nome: falha.name, mensagem: falha.message, stack: falha.stack }
+            : falha,
+      });
+      if (falha instanceof HttpsError) throw falha;
+      throw new HttpsError('internal', 'Não foi possível comparar as fotos. Tente novamente.');
     }
   },
 );

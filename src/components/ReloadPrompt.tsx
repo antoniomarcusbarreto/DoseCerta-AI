@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 
 /**
@@ -7,14 +8,25 @@ import { useRegisterSW } from 'virtual:pwa-register/react';
  * (assets do build mudaram) já instalado e em espera. `updateServiceWorker(true)`
  * manda o SW novo assumir (skip-waiting) e recarrega a página — sem isso o
  * usuário ficaria preso na versão antiga até fechar todas as abas.
+ *
+ * O reload não é instantâneo (espera o `controllerchange`), então escondemos
+ * o banner e desabilitamos o botão assim que o clique acontece — sem isso,
+ * um segundo clique dispara `updateServiceWorker` de novo, ou o banner some
+ * e reaparece durante a janela entre o clique e o reload de fato.
  */
 export function ReloadPrompt() {
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
   } = useRegisterSW();
+  const [atualizando, setAtualizando] = useState(false);
 
-  if (!needRefresh) return null;
+  if (!needRefresh || atualizando) return null;
+
+  function atualizar() {
+    setAtualizando(true);
+    updateServiceWorker(true);
+  }
 
   return (
     <div
@@ -61,7 +73,7 @@ export function ReloadPrompt() {
         </button>
         <button
           type="button"
-          onClick={() => updateServiceWorker(true)}
+          onClick={atualizar}
           style={{
             padding: '10px 16px',
             borderRadius: 'var(--r-pill)',

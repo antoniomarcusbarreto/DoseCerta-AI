@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { httpsCallable } from 'firebase/functions';
 import { Alerta } from '@/components/Alerta';
 import { Button } from '@/components/Button';
 import { CircleButton } from '@/components/CircleButton';
@@ -12,6 +13,24 @@ import type { AnguloFoto, RegistroFoto } from '@/domain/tipos';
 import { useDados } from '@/features/dados/DadosProvider';
 import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
 import { excluirFotoProgresso, uploadFotoProgresso } from '@/features/dados/repositorio';
+import { getFunctionsCliente } from '@/lib/firebase';
+
+/**
+ * Tempo máximo de espera no cliente pela comparação — acima do timeout
+ * interno da Cloud Function (25s): o relógio do cliente começa a contar
+ * antes do cold start e do download das duas fotos do Storage, então precisa
+ * de folga pra não estourar antes da function sequer ter chance de responder.
+ */
+const TIMEOUT_ANALISE_COMPARACAO_MS = 40_000;
+
+function comTimeout<T>(promessa: Promise<T>, ms: number, mensagem: string): Promise<T> {
+  return Promise.race([
+    promessa,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(mensagem)), ms);
+    }),
+  ]);
+}
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -137,20 +156,44 @@ export function TelaGaleria() {
     });
   }
 
-  async function handleGenerateAIAnalysis() {
-    setIsAnalyzing(true);
-    // TODO: Substituir por chamada ao Firebase Functions (Gemini Vision)
-    setTimeout(() => {
-      setAiAnalysis(
-        '✨ Análise Concluída: É possível notar uma redução clara no inchaço abdominal e uma melhora significativa na sua postura entre as duas fotos. O caimento das roupas está visivelmente mais solto. O processo está funcionando perfeitamente, continue firme na sua jornada!',
-      );
-      setIsAnalyzing(false);
-    }, 3000);
-  }
-
   const fotosComparadas = selectedPhotos
     .map((id) => fotos.find((f) => f.id === id))
     .filter((f): f is RegistroFoto => f !== undefined);
+
+  async function handleGenerateAIAnalysis() {
+    if (fotosComparadas.length !== 2) return;
+    // Ordena por data — "antes" é sempre a mais antiga, independente da ordem de clique no grid.
+    const [fotoAntes, fotoDepois] = [...fotosComparadas].sort(
+      (a, b) => a.recordedAt.getTime() - b.recordedAt.getTime(),
+    );
+
+    setErro(null);
+    setIsAnalyzing(true);
+    try {
+      const analisarComparacaoFotosIA = httpsCallable<
+        { beforeStoragePath: string; afterStoragePath: string },
+        { analysis: string }
+      >(getFunctionsCliente(), 'analisarComparacaoFotosIA');
+
+      const { data } = await comTimeout(
+        analisarComparacaoFotosIA({
+          beforeStoragePath: fotoAntes.storagePath,
+          afterStoragePath: fotoDepois.storagePath,
+        }),
+        TIMEOUT_ANALISE_COMPARACAO_MS,
+        'A análise demorou demais. Tente novamente.',
+      );
+
+      setAiAnalysis(data.analysis);
+    } catch (falha) {
+      console.error('[TelaGaleria] falha ao gerar análise de comparação', falha);
+      setErro(
+        falha instanceof Error ? falha.message : 'Não foi possível gerar a análise. Tente novamente.',
+      );
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
 
   return (
     <Pagina
