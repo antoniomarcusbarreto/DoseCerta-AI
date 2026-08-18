@@ -222,17 +222,30 @@ export type ItemRefeicaoIA = { name: string; quantity: string };
 
 export type MacrosRefeicao = { protein: number; carbs: number; fat: number; kcal: number };
 
-export type StatusRefeicao = 'pending' | 'completed';
+/**
+ * `analyzing`: foto já subiu, aguardando a IA. `error`: a IA falhou ou deu
+ * timeout — `analysisError` traz a mensagem. `pending`: análise concluída,
+ * aguardando o usuário confirmar quanto comeu. `completed`: confirmada.
+ */
+export type StatusRefeicao = 'analyzing' | 'pending' | 'completed' | 'error';
 
-/** Uma refeição escaneada via foto e analisada pela IA (Gemini Vision). */
+/**
+ * Uma refeição registrada e analisada pela IA — via foto (Gemini Vision) ou
+ * via descrição em texto (Gemini). `imageUrl`/`storagePath` só existem
+ * quando a origem foi uma foto; `description` só quando foi texto digitado.
+ * Exatamente um dos dois está preenchido, nunca os dois nem nenhum.
+ */
 export type RegistroRefeicao = {
   id: string;
-  imageUrl: string;
-  storagePath: string;
+  imageUrl: string | null;
+  storagePath: string | null;
+  description: string | null;
   items: ItemRefeicaoIA[];
   macros: MacrosRefeicao;
   aiFeedback: string;
   status: StatusRefeicao;
+  /** Mensagem de erro da análise, só preenchida quando `status === 'error'`. */
+  analysisError: string | null;
   consumedPercentage: number | null;
   createdAt: Date;
 };

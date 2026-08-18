@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
+import { Alerta } from '@/components/Alerta';
 import { Button } from '@/components/Button';
 import { CircleButton } from '@/components/CircleButton';
 import { Hero } from '@/components/Hero';
@@ -8,6 +9,7 @@ import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { getFunctionsCliente } from '@/lib/firebase';
+import * as biometriaService from '@/lib/biometriaService';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -49,6 +51,27 @@ export function TelaMeusDados() {
   const navegar = useNavigate();
   const [modalExclusaoAberto, setModalExclusaoAberto] = useState(false);
   const [modalSenhaAberto, setModalSenhaAberto] = useState(false);
+  const [biometriaHabilitada, setBiometriaHabilitada] = useState(() =>
+    biometriaService.dispositivoTemBiometria(),
+  );
+  const [habilitandoBiometria, setHabilitandoBiometria] = useState(false);
+  const [erroBiometria, setErroBiometria] = useState<string | null>(null);
+
+  async function habilitarBiometria() {
+    setErroBiometria(null);
+    setHabilitandoBiometria(true);
+    try {
+      await biometriaService.registrarBiometria();
+      setBiometriaHabilitada(true);
+    } catch (falha) {
+      if (!biometriaService.eCancelamentoDoUsuario(falha)) {
+        console.error('[TelaMeusDados] falha ao registrar biometria', falha);
+        setErroBiometria('Não foi possível habilitar a biometria. Tente novamente.');
+      }
+    } finally {
+      setHabilitandoBiometria(false);
+    }
+  }
 
   return (
     <Pagina
@@ -96,6 +119,24 @@ export function TelaMeusDados() {
           ))}
         </ul>
       </SheetCard>
+
+      {biometriaService.suportaBiometria() ? (
+        <SheetCard
+          titulo="Login biométrico"
+          subtitulo="Entre com Face ID, Touch ID ou a biometria do seu celular, sem digitar senha."
+        >
+          <div className="space-y-3">
+            {biometriaHabilitada ? (
+              <Alerta tom="ok" titulo="Biometria habilitada neste dispositivo" />
+            ) : (
+              <Button larguraTotal onClick={() => void habilitarBiometria()} disabled={habilitandoBiometria}>
+                {habilitandoBiometria ? 'Habilitando…' : 'Habilitar Login Biométrico'}
+              </Button>
+            )}
+            {erroBiometria ? <Alerta tom="danger" titulo={erroBiometria} /> : null}
+          </div>
+        </SheetCard>
+      ) : null}
 
       <SheetCard titulo="Excluir conta" subtitulo="Apaga permanentemente sua conta e todos os seus dados.">
         <Button

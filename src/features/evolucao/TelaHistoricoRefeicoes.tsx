@@ -45,7 +45,7 @@ export function TelaHistoricoRefeicoes() {
 
   const { refeicoesTodas, erro: erroEvolucao } = useEvolucao();
 
-  function handleDeleteMeal(mealId: string, storagePath: string) {
+  function handleDeleteMeal(mealId: string, storagePath: string | null) {
     if (!uid) return;
     askConfirm({
       title: 'Excluir Refeição',

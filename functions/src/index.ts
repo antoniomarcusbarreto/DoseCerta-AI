@@ -30,6 +30,12 @@ export {
   adminMetricas,
   adminEnviarBroadcast,
 } from './admin.js';
+export {
+  webauthnIniciarRegistro,
+  webauthnConcluirRegistro,
+  webauthnIniciarLogin,
+  webauthnConcluirLogin,
+} from './webauthn.js';
 
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const geminiModel = defineString('GEMINI_MODEL', { default: 'gemini-flash-latest' });
@@ -295,6 +301,31 @@ const esquemaAnaliseRefeicao = {
   required: ['items', 'macros', 'aiFeedback'],
 };
 
+const TIMEOUT_ANALISE_REFEICAO_MS = 15_000;
+
+/**
+ * Corre `promessa` contra um cronômetro: se `promessa` não resolver dentro de
+ * `ms`, rejeita com `deadline-exceeded` em vez de deixar a chamada pendurada
+ * até o timeout da própria plataforma (bem mais longo e sem mensagem clara
+ * pro usuário). Não cancela a chamada ao Gemini de fato — só para de esperar
+ * por ela — mas é o suficiente pra função responder rápido em vez de travar
+ * o app no estado "analisando".
+ */
+function comTimeout<T>(promessa: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promessa,
+    new Promise<never>((_, reject) => {
+      setTimeout(
+        () =>
+          reject(
+            new HttpsError('deadline-exceeded', `A análise da refeição excedeu ${Math.round(ms / 1000)}s.`),
+          ),
+        ms,
+      );
+    }),
+  ]);
+}
+
 /**
  * Analisa a foto de um prato de comida via Gemini Vision, cruzando com o
  * plano alimentar ativo do usuário (se houver). A imagem já está no Storage
@@ -333,18 +364,22 @@ export const analisarRefeicaoIA = onCall(
       'um feedback curto (1-2 frases, em português, pode usar emoji) cruzando o que foi identificado com o ' +
       `plano alimentar do usuário abaixo.\n\n${promptContexto}`;
 
+    const inicio = Date.now();
     try {
       const [buffer] = await getStorage().bucket().file(storagePath).download();
       const imageBase64 = buffer.toString('base64');
 
-      const resposta = await genAI.models.generateContent({
-        model: geminiModel.value(),
-        contents: [{ text: prompt }, { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: esquemaAnaliseRefeicao,
-        },
-      });
+      const resposta = await comTimeout(
+        genAI.models.generateContent({
+          model: geminiModel.value(),
+          contents: [{ text: prompt }, { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: esquemaAnaliseRefeicao,
+          },
+        }),
+        TIMEOUT_ANALISE_REFEICAO_MS,
+      );
 
       const texto = resposta.text;
       if (!texto) {
@@ -358,9 +393,107 @@ export const analisarRefeicaoIA = onCall(
 
       return extraido;
     } catch (falha) {
+      const duracaoMs = Date.now() - inicio;
+      const foiTimeout = falha instanceof HttpsError && falha.code === 'deadline-exceeded';
+      console.error('[analisarRefeicaoIA] falha ao analisar refeição via Gemini', {
+        uid,
+        storagePath,
+        duracaoMs,
+        timeout: foiTimeout,
+        erro:
+          falha instanceof Error
+            ? { nome: falha.name, mensagem: falha.message, stack: falha.stack }
+            : falha,
+      });
       if (falha instanceof HttpsError) throw falha;
-      console.error('[analisarRefeicaoIA] falha ao analisar refeição via Gemini', storagePath, falha);
       throw new HttpsError('internal', 'Não foi possível analisar a foto. Tente novamente.');
+    }
+  },
+);
+
+const TAMANHO_MAXIMO_DESCRICAO = 1000;
+
+/**
+ * Analisa uma refeição descrita em texto (em vez de foto), cruzando com o
+ * plano alimentar ativo do usuário (se houver). Mesmo esquema de resposta e
+ * mesma lógica de timeout/log de `analisarRefeicaoIA` — só troca a entrada
+ * (texto em vez de imagem) e o prompt.
+ */
+export const analisarDescricaoRefeicaoIA = onCall(
+  { secrets: [geminiApiKey], region: 'southamerica-east1', cors: true },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'É necessário estar logado.');
+    }
+
+    const uid = request.auth.uid;
+    const { descricao, dietPlanGoals } = request.data as {
+      descricao?: string;
+      dietPlanGoals?: { title: string; meals: { name: string; time: string; description: string }[] } | null;
+    };
+
+    if (!descricao || !descricao.trim()) {
+      throw new HttpsError('invalid-argument', 'descricao é obrigatória.');
+    }
+    if (descricao.length > TAMANHO_MAXIMO_DESCRICAO) {
+      throw new HttpsError(
+        'invalid-argument',
+        `Descrição muito longa. Envie até ${TAMANHO_MAXIMO_DESCRICAO} caracteres.`,
+      );
+    }
+
+    const genAI = new GoogleGenAI({ apiKey: geminiApiKey.value() });
+    const promptContexto = dietPlanGoals
+      ? `Plano alimentar ativo do usuário: "${dietPlanGoals.title}". Refeições planejadas: ${JSON.stringify(dietPlanGoals.meals)}.`
+      : 'O usuário não possui um plano alimentar ativo cadastrado.';
+
+    const prompt =
+      'O usuário descreveu em texto o que comeu. Identifique os alimentos e quantidades mencionados ' +
+      '(estime a quantidade quando não for explícita), calcule os macronutrientes totais (proteína, ' +
+      'carboidrato, gordura em gramas, e calorias), e escreva um feedback curto (1-2 frases, em português, ' +
+      'pode usar emoji) cruzando o que foi descrito com o plano alimentar do usuário abaixo.\n\n' +
+      `${promptContexto}\n\nDescrição da refeição: "${descricao.trim()}"`;
+
+    const inicio = Date.now();
+    try {
+      const resposta = await comTimeout(
+        genAI.models.generateContent({
+          model: geminiModel.value(),
+          contents: [{ text: prompt }],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: esquemaAnaliseRefeicao,
+          },
+        }),
+        TIMEOUT_ANALISE_REFEICAO_MS,
+      );
+
+      const texto = resposta.text;
+      if (!texto) {
+        throw new HttpsError('internal', 'A IA não retornou conteúdo.');
+      }
+
+      const extraido = JSON.parse(texto) as AnaliseRefeicaoExtraida;
+      if (!Array.isArray(extraido.items) || !extraido.macros || !extraido.aiFeedback) {
+        throw new HttpsError('internal', 'Resposta da IA em formato inesperado.');
+      }
+
+      return extraido;
+    } catch (falha) {
+      const duracaoMs = Date.now() - inicio;
+      const foiTimeout = falha instanceof HttpsError && falha.code === 'deadline-exceeded';
+      console.error('[analisarDescricaoRefeicaoIA] falha ao analisar refeição via Gemini', {
+        uid,
+        descricao,
+        duracaoMs,
+        timeout: foiTimeout,
+        erro:
+          falha instanceof Error
+            ? { nome: falha.name, mensagem: falha.message, stack: falha.stack }
+            : falha,
+      });
+      if (falha instanceof HttpsError) throw falha;
+      throw new HttpsError('internal', 'Não foi possível analisar a descrição. Tente novamente.');
     }
   },
 );

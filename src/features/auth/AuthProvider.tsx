@@ -17,6 +17,7 @@ import {
   linkWithCredential,
   onAuthStateChanged,
   reauthenticateWithCredential,
+  signInWithCustomToken,
   signInWithEmailAndPassword,
   signInWithPopup,
   signInWithRedirect,
@@ -31,6 +32,7 @@ import { onSnapshot } from 'firebase/firestore';
 import { getAuthCliente, getFunctionsCliente, getGoogleProvider, firebaseConfigurado } from '@/lib/firebase';
 import { garantirPerfil } from '@/features/dados/repositorio';
 import { refEstadoConta } from '@/lib/firestore';
+import * as biometriaService from '@/lib/biometriaService';
 import { detectarAndroid, detectarIOS, limparEstadoLocal, rodandoComoPWAInstalado, validarSessao } from './sessao';
 
 /** Conflito detectado: já existe conta com este e-mail por outro método de login. */
@@ -53,6 +55,7 @@ type AuthContexto = {
   redefinirSenhaComCodigo: (email: string, codigo: string, novaSenha: string) => Promise<void>;
   alterarSenha: (senhaAtual: string, novaSenha: string) => Promise<void>;
   entrarComGoogle: () => Promise<void>;
+  entrarComBiometria: () => Promise<void>;
   vincularComSenha: (senha: string) => Promise<void>;
   cancelarVinculo: () => void;
   sair: () => Promise<void>;
@@ -222,25 +225,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setRedirectPronto(true));
   }, []);
 
-  /*
-   * TODO (estudo): desbloqueio biométrico via Passkeys/WebAuthn.
-   *
-   * O Firebase Auth não verifica assertions WebAuthn nativamente, então a
-   * abordagem seria:
-   * 1. Cadastro da passkey: no dispositivo já logado, chamar
-   *    `navigator.credentials.create({ publicKey: ... })` (checar suporte
-   *    antes com `window.PublicKeyCredential`) e mandar a credencial pública
-   *    resultante pra uma Cloud Function, que a guarda associada ao `uid`
-   *    (ex.: `users/{uid}/estado/passkeys`, mesmo padrão de doc
-   *    "admin-only" usado para o bloqueio de conta acima).
-   * 2. Login: chamar `navigator.credentials.get({ publicKey: ... })`, mandar
-   *    a assertion pra uma Cloud Function que verifica a assinatura contra a
-   *    credencial cadastrada e, se válida, gera um custom token
-   *    (`getAuth().createCustomToken(uid)`).
-   * 3. No cliente, trocar esse custom token por uma sessão real com
-   *    `signInWithCustomToken(getAuthCliente(), token)` — substituindo a
-   *    digitação de senha nos acessos seguintes.
-   */
   const entrar = useCallback(async (email: string, senha: string) => {
     setMotivoSaida(null);
     await signInWithEmailAndPassword(getAuthCliente(), email, senha);
@@ -323,6 +307,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const entrarComBiometria = useCallback(async () => {
+    setMotivoSaida(null);
+    const token = await biometriaService.entrarComBiometria();
+    await signInWithCustomToken(getAuthCliente(), token);
+  }, []);
+
   const vincularComSenha = useCallback(
     async (senha: string) => {
       if (!vinculoPendente) return;
@@ -360,6 +350,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       redefinirSenhaComCodigo,
       alterarSenha,
       entrarComGoogle,
+      entrarComBiometria,
       vincularComSenha,
       cancelarVinculo,
       sair,
@@ -377,6 +368,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       redefinirSenhaComCodigo,
       alterarSenha,
       entrarComGoogle,
+      entrarComBiometria,
       vincularComSenha,
       cancelarVinculo,
       sair,

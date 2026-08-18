@@ -489,20 +489,56 @@ export async function uploadFotoRefeicao(
   return { imageUrl, storagePath };
 }
 
-export type NovaRefeicaoPendente = Pick<
-  RegistroRefeicao,
-  'imageUrl' | 'storagePath' | 'items' | 'macros' | 'aiFeedback'
->;
-
-/** Cria o registro da refeição escaneada assim que a IA responde, com status `pending`. */
-export async function criarRefeicaoPendente(uid: string, nova: NovaRefeicaoPendente): Promise<string> {
-  const criado = await addDoc(colRefeicoes(uid), {
-    ...nova,
-    status: 'pending',
+/**
+ * Cria o registro assim que a foto termina de subir (ou a descrição em texto
+ * é enviada), com status `analyzing` — antes de chamar a IA, não depois. É o
+ * que torna a análise resiliente a reload/fechar a aba no meio do caminho: o
+ * rascunho existe no Firestore desde o início, então
+ * `finalizarAnaliseRefeicao`/`marcarErroAnaliseRefeicao` só precisam
+ * atualizá-lo, e a tela consegue retomar de onde parou.
+ *
+ * `imageUrl`/`storagePath` (origem foto) e `description` (origem texto) são
+ * mutuamente exclusivos — o chamador passa um dos dois preenchido e o outro
+ * `null`.
+ */
+export async function criarRefeicaoEmAnalise(
+  uid: string,
+  dados: Pick<RegistroRefeicao, 'imageUrl' | 'storagePath' | 'description'>,
+): Promise<string> {
+  const nova: Omit<RegistroRefeicao, 'id'> = {
+    ...dados,
+    items: [],
+    macros: { protein: 0, carbs: 0, fat: 0, kcal: 0 },
+    aiFeedback: '',
+    status: 'analyzing',
+    analysisError: null,
     consumedPercentage: null,
     createdAt: new Date(),
-  } as RegistroRefeicao);
+  };
+  const criado = await addDoc(colRefeicoes(uid), nova as RegistroRefeicao);
   return criado.id;
+}
+
+/** Grava o resultado da IA e move o registro para `pending` (aguardando confirmação). */
+export async function finalizarAnaliseRefeicao(
+  uid: string,
+  mealId: string,
+  resultado: Pick<RegistroRefeicao, 'items' | 'macros' | 'aiFeedback'>,
+): Promise<void> {
+  await updateDoc(doc(colRefeicoes(uid), mealId), {
+    ...resultado,
+    status: 'pending',
+    analysisError: null,
+  });
+}
+
+/** Marca a análise como falha (erro ou timeout), preservando o registro para o usuário descartar ou tentar de novo. */
+export async function marcarErroAnaliseRefeicao(
+  uid: string,
+  mealId: string,
+  analysisError: string,
+): Promise<void> {
+  await updateDoc(doc(colRefeicoes(uid), mealId), { status: 'error', analysisError });
 }
 
 /** Atualiza os itens de uma refeição ainda pendente (usado pela edição manual antes de confirmar). */
@@ -531,31 +567,32 @@ export async function confirmarRefeicao(
   });
 }
 
-/** Descarta um scan pendente: remove a foto do Storage e o registro do Firestore. */
+/** Remove a foto do Storage associada à refeição, se houver — refeições de origem texto não têm nenhuma. */
+async function excluirFotoRefeicaoSeExistir(storagePath: string | null): Promise<void> {
+  if (!storagePath) return;
+  try {
+    await deleteObject(refStorage(getStorageCliente(), storagePath));
+  } catch (falha) {
+    const codigo = (falha as { code?: string }).code;
+    if (codigo !== 'storage/object-not-found') throw falha;
+  }
+}
+
+/** Descarta um scan pendente: remove a foto do Storage (se houver) e o registro do Firestore. */
 export async function descartarRefeicaoPendente(
   uid: string,
   refeicao: Pick<RegistroRefeicao, 'id' | 'storagePath'>,
 ): Promise<void> {
-  try {
-    await deleteObject(refStorage(getStorageCliente(), refeicao.storagePath));
-  } catch (falha) {
-    const codigo = (falha as { code?: string }).code;
-    if (codigo !== 'storage/object-not-found') throw falha;
-  }
+  await excluirFotoRefeicaoSeExistir(refeicao.storagePath);
   await deleteDoc(doc(colRefeicoes(uid), refeicao.id));
 }
 
-/** Exclui uma refeição já concluída: remove a foto do Storage e o registro do Firestore. */
+/** Exclui uma refeição já concluída: remove a foto do Storage (se houver) e o registro do Firestore. */
 export async function excluirRefeicao(
   uid: string,
   refeicao: Pick<RegistroRefeicao, 'id' | 'storagePath'>,
 ): Promise<void> {
-  try {
-    await deleteObject(refStorage(getStorageCliente(), refeicao.storagePath));
-  } catch (falha) {
-    const codigo = (falha as { code?: string }).code;
-    if (codigo !== 'storage/object-not-found') throw falha;
-  }
+  await excluirFotoRefeicaoSeExistir(refeicao.storagePath);
   await deleteDoc(doc(colRefeicoes(uid), refeicao.id));
 }
 

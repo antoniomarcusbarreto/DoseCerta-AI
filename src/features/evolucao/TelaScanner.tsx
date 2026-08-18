@@ -10,16 +10,18 @@ import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
 import { useConfirm } from '@/contexts/ConfirmContext';
-import type { ItemRefeicaoIA, MacrosRefeicao } from '@/domain/tipos';
+import type { ItemRefeicaoIA, MacrosRefeicao, RegistroRefeicao } from '@/domain/tipos';
 import { CardRefeicao } from '@/features/evolucao/CardRefeicao';
 import { useDados } from '@/features/dados/DadosProvider';
 import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
 import {
   atualizarItensRefeicaoPendente,
   confirmarRefeicao,
-  criarRefeicaoPendente,
+  criarRefeicaoEmAnalise,
   descartarRefeicaoPendente,
   excluirRefeicao,
+  finalizarAnaliseRefeicao,
+  marcarErroAnaliseRefeicao,
   uploadFotoRefeicao,
 } from '@/features/dados/repositorio';
 import { getFunctionsCliente } from '@/lib/firebase';
@@ -47,7 +49,20 @@ const OPCOES_PERCENTUAL: { rotulo: string; valor: number }[] = [
 
 const CHAVE_PENDING_MEAL_DRAFT = 'pending_meal_draft';
 
+/** Tempo máximo de espera pela análise da IA — depois disso a tela desiste e marca erro, em vez de travar. */
+const TIMEOUT_ANALISE_MS = 15_000;
+
 type RespostaAnaliseRefeicao = { items: ItemRefeicaoIA[]; macros: MacrosRefeicao; aiFeedback: string };
+
+/** Corre `promessa` contra um cronômetro: rejeita com `mensagem` se `ms` passarem antes dela resolver. */
+function comTimeout<T>(promessa: Promise<T>, ms: number, mensagem: string): Promise<T> {
+  return Promise.race([
+    promessa,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(mensagem)), ms);
+    }),
+  ]);
+}
 
 export function TelaScanner() {
   const navegar = useNavigate();
@@ -62,6 +77,8 @@ export function TelaScanner() {
   const [isEditingMeal, setIsEditingMeal] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [itensEmEdicao, setItensEmEdicao] = useState<ItemRefeicaoIA[]>([]);
+  const [mostrarCampoTexto, setMostrarCampoTexto] = useState(false);
+  const [descricaoTexto, setDescricaoTexto] = useState('');
 
   const { planos, refeicoesHoje: refeicoesDeHoje, erro: erroEvolucao } = useEvolucao();
   const planoAtivo = planos.find((p) => p.isActive) ?? null;
@@ -92,6 +109,52 @@ export function TelaScanner() {
     if (pendingMeal) setItensEmEdicao(pendingMeal.items);
   }, [pendingMeal]);
 
+  type DietPlanGoals = { title: string; meals: { name: string; time: string; description: string }[] } | null;
+
+  /**
+   * Núcleo comum às duas origens (foto e texto): cria o rascunho já com
+   * status `analyzing`, chama a Cloud Function correspondente com timeout, e
+   * grava o resultado (ou o erro) no mesmo registro. Se `criarRefeicaoEmAnalise`
+   * falhar (nenhum rascunho chegou a existir), relança pro chamador decidir a
+   * mensagem — dali em diante, qualquer falha vira `status: 'error'` no
+   * próprio documento em vez de se perder num alerta local.
+   */
+  async function processarAnalise(
+    dadosIniciais: Pick<RegistroRefeicao, 'imageUrl' | 'storagePath' | 'description'>,
+    chamarIA: () => Promise<RespostaAnaliseRefeicao>,
+  ): Promise<void> {
+    if (!uid) return;
+    let novoId: string | null = null;
+    try {
+      novoId = await criarRefeicaoEmAnalise(uid, dadosIniciais);
+      setIsEditingMeal(false);
+      setPendingMealId(novoId);
+
+      const analise = await comTimeout(
+        chamarIA(),
+        TIMEOUT_ANALISE_MS,
+        'A análise demorou demais. Tente novamente.',
+      );
+
+      await finalizarAnaliseRefeicao(uid, novoId, {
+        items: analise.items,
+        macros: analise.macros,
+        aiFeedback: analise.aiFeedback,
+      });
+    } catch (falha) {
+      console.error('[TelaScanner] falha ao analisar refeição', falha);
+      if (!novoId) throw falha;
+      const mensagem =
+        falha instanceof Error ? falha.message : 'Não foi possível analisar a refeição. Tente novamente.';
+      try {
+        await marcarErroAnaliseRefeicao(uid, novoId, mensagem);
+      } catch (falhaAoMarcar) {
+        console.error('[TelaScanner] falha ao marcar erro de análise', falhaAoMarcar);
+        setErro(mensagem);
+      }
+    }
+  }
+
   async function handleFileUpload(evento: ChangeEvent<HTMLInputElement>) {
     const arquivo = evento.target.files?.[0] ?? null;
     evento.target.value = '';
@@ -100,34 +163,52 @@ export function TelaScanner() {
     setErro(null);
     setIsAnalyzing(true);
     try {
+      // Sobe a foto ANTES de criar o rascunho — se o upload falhar, ainda não
+      // existe nenhum registro no Firestore pra marcar como erro.
       const { imageUrl, storagePath } = await uploadFotoRefeicao(uid, arquivo);
 
-      const analisarRefeicaoIA = httpsCallable<
-        {
-          storagePath: string;
-          dietPlanGoals: { title: string; meals: { name: string; time: string; description: string }[] } | null;
-        },
-        RespostaAnaliseRefeicao
-      >(getFunctionsCliente(), 'analisarRefeicaoIA');
-
-      const { data: analise } = await analisarRefeicaoIA({
-        storagePath,
-        dietPlanGoals: planoAtivo ? { title: planoAtivo.title, meals: planoAtivo.meals } : null,
+      await processarAnalise({ imageUrl, storagePath, description: null }, async () => {
+        const analisarRefeicaoIA = httpsCallable<
+          { storagePath: string; dietPlanGoals: DietPlanGoals },
+          RespostaAnaliseRefeicao
+        >(getFunctionsCliente(), 'analisarRefeicaoIA');
+        const { data } = await analisarRefeicaoIA({
+          storagePath,
+          dietPlanGoals: planoAtivo ? { title: planoAtivo.title, meals: planoAtivo.meals } : null,
+        });
+        return data;
       });
-
-      const novoId = await criarRefeicaoPendente(uid, {
-        imageUrl,
-        storagePath,
-        items: analise.items,
-        macros: analise.macros,
-        aiFeedback: analise.aiFeedback,
-      });
-
-      setIsEditingMeal(false);
-      setPendingMealId(novoId);
     } catch (falha) {
-      console.error('[TelaScanner] falha ao analisar refeição', falha);
-      setErro('Não foi possível analisar a foto. Tente novamente.');
+      console.error('[TelaScanner] falha ao enviar foto', falha);
+      setErro('Não foi possível enviar a foto. Tente novamente.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
+
+  async function handleAnalisarDescricao() {
+    const descricao = descricaoTexto.trim();
+    if (!descricao || !uid) return;
+
+    setErro(null);
+    setIsAnalyzing(true);
+    try {
+      await processarAnalise({ imageUrl: null, storagePath: null, description: descricao }, async () => {
+        const analisarDescricaoRefeicaoIA = httpsCallable<
+          { descricao: string; dietPlanGoals: DietPlanGoals },
+          RespostaAnaliseRefeicao
+        >(getFunctionsCliente(), 'analisarDescricaoRefeicaoIA');
+        const { data } = await analisarDescricaoRefeicaoIA({
+          descricao,
+          dietPlanGoals: planoAtivo ? { title: planoAtivo.title, meals: planoAtivo.meals } : null,
+        });
+        return data;
+      });
+      setDescricaoTexto('');
+      setMostrarCampoTexto(false);
+    } catch (falha) {
+      console.error('[TelaScanner] falha ao enviar descrição', falha);
+      setErro('Não foi possível enviar a descrição. Tente novamente.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -176,7 +257,7 @@ export function TelaScanner() {
     setIsEditingMeal(false);
   }
 
-  function handleDeleteMeal(mealId: string, storagePath: string) {
+  function handleDeleteMeal(mealId: string, storagePath: string | null) {
     if (!uid) return;
     askConfirm({
       title: 'Excluir Refeição',
@@ -222,20 +303,67 @@ export function TelaScanner() {
 
       {!isAnalyzing && !pendingMeal ? (
         <SheetCard titulo="Escanear prato">
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={handleFileUpload}
-          />
-          <Button type="button" larguraTotal onClick={() => inputRef.current?.click()} disabled={!uid}>
-            📸 Escanear Prato
-          </Button>
+          <div className="flex flex-col gap-3">
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={handleFileUpload}
+            />
+            <Button type="button" larguraTotal onClick={() => inputRef.current?.click()} disabled={!uid}>
+              📸 Escanear Prato
+            </Button>
+
+            {!mostrarCampoTexto ? (
+              <Button
+                type="button"
+                variante="fantasma"
+                larguraTotal
+                disabled={!uid}
+                onClick={() => setMostrarCampoTexto(true)}
+              >
+                ✍️ Digitar Refeição
+              </Button>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <textarea
+                  className="t-body w-full rounded-xl p-3"
+                  style={{ background: 'var(--surface-sunken)', color: 'var(--ink)' }}
+                  rows={3}
+                  maxLength={1000}
+                  placeholder="Ex: 150g de frango grelhado, arroz e uma salada de alface e tomate"
+                  value={descricaoTexto}
+                  onChange={(e) => setDescricaoTexto(e.target.value)}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variante="fantasma"
+                    onClick={() => {
+                      setMostrarCampoTexto(false);
+                      setDescricaoTexto('');
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    type="button"
+                    variante="secundaria"
+                    larguraTotal
+                    disabled={!descricaoTexto.trim()}
+                    onClick={handleAnalisarDescricao}
+                  >
+                    Analisar Descrição
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         </SheetCard>
       ) : null}
 
-      {isAnalyzing ? (
+      {isAnalyzing || pendingMeal?.status === 'analyzing' ? (
         <SheetCard titulo="Analisando">
           <div className="flex flex-col gap-3">
             <div className="h-32 w-full animate-pulse rounded-xl bg-sunken" />
@@ -249,7 +377,23 @@ export function TelaScanner() {
         </SheetCard>
       ) : null}
 
-      {pendingMeal ? (
+      {pendingMeal?.status === 'error' ? (
+        <SheetCard titulo="Falha na análise">
+          <div className="flex flex-col gap-3">
+            <Alerta
+              tom="danger"
+              titulo={pendingMeal.imageUrl ? 'Não foi possível analisar a imagem' : 'Não foi possível analisar a descrição'}
+            >
+              {pendingMeal.analysisError ?? 'Tente novamente.'}
+            </Alerta>
+            <Button type="button" variante="secundaria" larguraTotal onClick={handleDescartarMeal}>
+              🗑️ Descartar e tentar de novo
+            </Button>
+          </div>
+        </SheetCard>
+      ) : null}
+
+      {pendingMeal?.status === 'pending' ? (
         <SheetCard
           titulo="Refeição identificada"
           acao={
@@ -267,11 +411,21 @@ export function TelaScanner() {
         >
           <div className="flex flex-col gap-4">
             <div className="flex gap-3">
-              <img
-                src={pendingMeal.imageUrl}
-                alt="Foto do prato escaneado"
-                className="size-20 shrink-0 rounded-xl object-cover"
-              />
+              {pendingMeal.imageUrl ? (
+                <img
+                  src={pendingMeal.imageUrl}
+                  alt="Foto do prato escaneado"
+                  className="size-20 shrink-0 rounded-xl object-cover"
+                />
+              ) : (
+                <div
+                  className="flex size-20 shrink-0 items-center justify-center rounded-xl text-2xl"
+                  style={{ background: 'var(--surface-sunken)' }}
+                  title={pendingMeal.description ?? undefined}
+                >
+                  ✍️
+                </div>
+              )}
               {isEditingMeal ? (
                 <div className="flex flex-1 flex-col gap-2">
                   {itensEmEdicao.map((item, indice) => (

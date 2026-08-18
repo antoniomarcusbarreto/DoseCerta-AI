@@ -369,8 +369,9 @@ export const conversorRegistroFoto = converter<RegistroFoto>(
 
 export const conversorRegistroRefeicao = converter<RegistroRefeicao>(
   (d) => ({
-    imageUrl: String(d.imageUrl ?? ''),
-    storagePath: String(d.storagePath ?? ''),
+    imageUrl: d.imageUrl ?? null,
+    storagePath: d.storagePath ?? null,
+    description: d.description ?? null,
     items: Array.isArray(d.items) ? d.items : [],
     macros: {
       protein: Number(d.macros?.protein ?? 0),
@@ -379,17 +380,22 @@ export const conversorRegistroRefeicao = converter<RegistroRefeicao>(
       kcal: Number(d.macros?.kcal ?? 0),
     },
     aiFeedback: String(d.aiFeedback ?? ''),
-    status: (d.status === 'completed' ? 'completed' : 'pending') as RegistroRefeicao['status'],
+    status: (['analyzing', 'pending', 'completed', 'error'].includes(d.status)
+      ? d.status
+      : 'pending') as RegistroRefeicao['status'],
+    analysisError: d.analysisError ?? null,
     consumedPercentage: d.consumedPercentage ?? null,
     createdAt: paraData(d.createdAt) ?? new Date(),
   }),
   (r) => ({
     imageUrl: r.imageUrl,
     storagePath: r.storagePath,
+    description: r.description,
     items: r.items,
     macros: r.macros,
     aiFeedback: r.aiFeedback,
     status: r.status,
+    analysisError: r.analysisError,
     consumedPercentage: r.consumedPercentage,
     createdAt: paraTimestamp(r.createdAt),
   }),

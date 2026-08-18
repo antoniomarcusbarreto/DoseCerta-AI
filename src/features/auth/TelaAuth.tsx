@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { firebaseConfigurado } from '@/lib/firebase';
+import * as biometriaService from '@/lib/biometriaService';
 import { Carregando } from '@/components/Carregando';
 import { useAuth } from './AuthProvider';
 
@@ -49,6 +50,7 @@ export function TelaAuth({ modo }: { modo: Modo }) {
     enviarCodigoRecuperacao,
     redefinirSenhaComCodigo,
     entrarComGoogle,
+    entrarComBiometria,
     vinculoPendente,
     vincularComSenha,
     cancelarVinculo,
@@ -62,6 +64,7 @@ export function TelaAuth({ modo }: { modo: Modo }) {
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [enviandoGoogle, setEnviandoGoogle] = useState(false);
+  const [enviandoBiometria, setEnviandoBiometria] = useState(false);
   const [senhaVinculo, setSenhaVinculo] = useState('');
   const [aceitouTermos, setAceitouTermos] = useState(false);
 
@@ -142,6 +145,18 @@ export function TelaAuth({ modo }: { modo: Modo }) {
       setErro(traduzirErro(falha));
     } finally {
       setEnviandoGoogle(false);
+    }
+  }
+
+  async function continuarComBiometria() {
+    setErro(null);
+    setEnviandoBiometria(true);
+    try {
+      await entrarComBiometria();
+    } catch (falha) {
+      if (!biometriaService.eCancelamentoDoUsuario(falha)) setErro(traduzirErro(falha));
+    } finally {
+      setEnviandoBiometria(false);
     }
   }
 
@@ -581,6 +596,20 @@ export function TelaAuth({ modo }: { modo: Modo }) {
             </svg>
             {enviandoGoogle ? 'Aguarde…' : 'Continuar com o Google'}
           </button>
+
+          {!criando && biometriaService.suportaBiometria() && biometriaService.dispositivoTemBiometria() ? (
+            <button
+              type="button"
+              onClick={() => void continuarComBiometria()}
+              disabled={enviandoBiometria || !firebaseConfigurado}
+              className="w-full inline-flex items-center justify-center gap-3 rounded-full px-6 transition-opacity hover:opacity-85 disabled:opacity-45 disabled:pointer-events-none bg-white/5 border border-white/20 text-white backdrop-blur-md h-12"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 2a5 5 0 0 0-5 5v2a5 5 0 0 0 .5 2.2M12 2a5 5 0 0 1 5 5v2c0 1.5-.3 3-1 4.3M7 9v0a5 5 0 0 0 1.5 3.6M7 9c0 5-2 8-3 9.5M12 9a3 3 0 0 1 3 3c0 3.5-1 6.5-2.5 8.5M12 9a3 3 0 0 0-3 3c0 1-.1 2-.4 3M15 12c0 4-1.5 7-3 8.5" />
+              </svg>
+              {enviandoBiometria ? 'Aguarde…' : 'Entrar com Biometria'}
+            </button>
+          ) : null}
 
           <p className="t-label pt-4 text-center text-slate-400">
             {criando ? 'Já tem conta? ' : 'Ainda não tem conta? '}

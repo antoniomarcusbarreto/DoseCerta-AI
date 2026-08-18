@@ -1,4 +1,5 @@
 import type { User } from 'firebase/auth';
+import { CHAVE_BIOMETRIA } from '@/lib/biometriaService';
 
 /**
  * Só estes códigos significam "esta sessão morreu" — conta excluída,
@@ -71,11 +72,18 @@ export function detectarAndroid(): boolean {
 /**
  * Limpa todo o rastro local da sessão. Reaproveitado tanto pelo logout manual
  * quanto pela detecção de sessão morta — precisam ser o mesmo teardown.
+ *
+ * O flag de biometria é a única exceção: ele marca que ESTE DISPOSITIVO tem
+ * uma passkey cadastrada, não a sessão em si, e precisa sobreviver ao logout
+ * pra "Entrar com Biometria" continuar aparecendo na próxima vez que o app
+ * abrir — senão o usuário teria que recadastrar a biometria a cada login.
  */
 export function limparEstadoLocal() {
   try {
+    const biometria = localStorage.getItem(CHAVE_BIOMETRIA);
     localStorage.clear();
     sessionStorage.clear();
+    if (biometria) localStorage.setItem(CHAVE_BIOMETRIA, biometria);
   } catch {
     // Storage bloqueado (modo privado): nada a limpar.
   }

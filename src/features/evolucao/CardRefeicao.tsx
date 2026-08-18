@@ -34,7 +34,7 @@ const IconeChevron = ({ aberto }: { aberto: boolean }) => (
 
 type CardRefeicaoProps = {
   refeicao: RegistroRefeicao;
-  onExcluir: (mealId: string, storagePath: string) => void;
+  onExcluir: (mealId: string, storagePath: string | null) => void;
   /** Mostra a data na legenda — desligue quando o card já está sob um cabeçalho de data. */
   mostrarData?: boolean;
 };
@@ -80,11 +80,21 @@ export function CardRefeicao({ refeicao, onExcluir, mostrarData = true }: CardRe
           onClick={() => setExpandido((atual) => !atual)}
           aria-expanded={expandido}
         >
-          <img
-            src={refeicao.imageUrl}
-            alt="Miniatura da refeição"
-            className="size-12 shrink-0 rounded-lg object-cover"
-          />
+          {refeicao.imageUrl ? (
+            <img
+              src={refeicao.imageUrl}
+              alt="Miniatura da refeição"
+              className="size-12 shrink-0 rounded-lg object-cover"
+            />
+          ) : (
+            <div
+              className="flex size-12 shrink-0 items-center justify-center rounded-lg text-lg"
+              style={{ background: 'var(--surface-sunken)' }}
+              title={refeicao.description ?? undefined}
+            >
+              ✍️
+            </div>
+          )}
           <div className="min-w-0 flex-1">
             <p className="t-label truncate text-ink">
               {refeicao.items.map((item) => item.name).join(', ')}
