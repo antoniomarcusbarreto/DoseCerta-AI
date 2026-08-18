@@ -42,6 +42,9 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  /* Reforça o `overscroll-behavior-y` do body: no Safari iOS o bounce
+     elástico às vezes escapa se só o body tiver a regra. */
+  overscroll-behavior-y: none;
 }
 
 body {
@@ -92,6 +95,19 @@ body {
 .t-label {
   font-size: 13px;
   font-weight: 500;
+}
+
+/*
+ * iOS dá zoom automático ao focar num campo com font-size < 16px. Todos os
+ * inputs/selects/textareas do app usam `.t-body` (15px) — em vez de subir a
+ * escala inteira (que também é texto comum em dezenas de telas), sobe só a
+ * combinação elemento+classe, que tem especificidade maior que `.t-body`
+ * sozinha e por isso vence sem precisar de `!important`.
+ */
+input.t-body,
+select.t-body,
+textarea.t-body {
+  font-size: 16px;
 }
 
 /* Os rótulos minúsculos e espaçados que aparecem acima de cada número. */

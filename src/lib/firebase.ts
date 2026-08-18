@@ -29,8 +29,16 @@ const config = {
 /**
  * O app precisa subir mesmo sem credenciais — é o que permite abrir o
  * /kitchen-sink e revisar o visual antes de existir um projeto Firebase.
+ *
+ * `authDomain` entra na checagem porque, sem ele, `signInWithRedirect` falha
+ * de um jeito silencioso: a navegação para o Google acontece, mas o retorno
+ * não sabe para onde voltar — sintoma idêntico a "perde a sessão depois do
+ * redirect", só que causado por env var faltando em produção (ex.: esquecida
+ * na Vercel), não por bug de código.
  */
-export const firebaseConfigurado = Boolean(config.apiKey && config.projectId && config.appId);
+export const firebaseConfigurado = Boolean(
+  config.apiKey && config.authDomain && config.projectId && config.appId,
+);
 
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;

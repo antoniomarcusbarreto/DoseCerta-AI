@@ -31,7 +31,7 @@ import { onSnapshot } from 'firebase/firestore';
 import { getAuthCliente, getFunctionsCliente, getGoogleProvider, firebaseConfigurado } from '@/lib/firebase';
 import { garantirPerfil } from '@/features/dados/repositorio';
 import { refEstadoConta } from '@/lib/firestore';
-import { limparEstadoLocal, rodandoComoPWAInstalado, validarSessao } from './sessao';
+import { detectarAndroid, detectarIOS, limparEstadoLocal, rodandoComoPWAInstalado, validarSessao } from './sessao';
 
 /** Conflito detectado: já existe conta com este e-mail por outro método de login. */
 type VinculoPendente = { email: string; credencial: AuthCredential };
@@ -94,7 +94,9 @@ const MSG_SENHA_ALTERADA = 'Senha alterada com sucesso. Faça login novamente.';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [usuario, setUsuario] = useState<User | null>(null);
-  const [carregando, setCarregando] = useState(firebaseConfigurado);
+  const [authPronto, setAuthPronto] = useState(false);
+  const [redirectPronto, setRedirectPronto] = useState(false);
+  const carregando = firebaseConfigurado && !(authPronto && redirectPronto);
   const [ehAdmin, setEhAdmin] = useState(false);
   const [carregandoClaims, setCarregandoClaims] = useState(firebaseConfigurado);
   const [motivoSaida, setMotivoSaida] = useState<string | null>(null);
@@ -149,11 +151,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const cancelar = onAuthStateChanged(auth, async (proximo) => {
       if (proximo && !(await validarSessao(proximo))) {
         await derrubarSessao();
-        setCarregando(false);
+        setAuthPronto(true);
         return;
       }
       setUsuario(proximo);
-      setCarregando(false);
+      setAuthPronto(true);
     });
 
     return cancelar;
@@ -210,9 +212,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch((falha) => {
         const pendente = paraVinculoPendente(falha);
-        if (pendente) setVinculoPendente(pendente);
-        else console.warn('[DoseCerta] falha ao concluir login por redirect:', falha);
-      });
+        if (pendente) {
+          setVinculoPendente(pendente);
+          return;
+        }
+        console.warn('[DoseCerta] falha ao concluir login por redirect:', falha);
+        setMotivoSaida('Não foi possível concluir o login. Tente novamente.');
+      })
+      .finally(() => setRedirectPronto(true));
   }, []);
 
   /*
@@ -288,9 +295,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const auth = getAuthCliente();
     const provider = getGoogleProvider();
 
-    if (rodandoComoPWAInstalado()) {
+    if (rodandoComoPWAInstalado() || detectarAndroid() || detectarIOS()) {
       // A promise resolve ao navegar embora; o resultado real chega via
-      // `getRedirectResult` quando a página recarrega.
+      // `getRedirectResult` quando a página recarrega. Vale para qualquer
+      // navegador móvel, não só o PWA instalado: é o `signInWithPopup` em
+      // contexto mobile que o Google trata como WebView não-confiável e
+      // rebaixa para a tela de QR/cross-device.
       await signInWithRedirect(auth, provider);
       return;
     }
