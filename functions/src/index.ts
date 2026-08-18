@@ -301,7 +301,10 @@ const esquemaAnaliseRefeicao = {
   required: ['items', 'macros', 'aiFeedback'],
 };
 
-const TIMEOUT_ANALISE_REFEICAO_MS = 15_000;
+// Vision (foto) genuinamente demora mais que texto puro no Gemini — e ainda
+// tem o download da foto do Storage antes da chamada. Texto é bem mais leve.
+const TIMEOUT_GEMINI_FOTO_MS = 20_000;
+const TIMEOUT_GEMINI_TEXTO_MS = 12_000;
 
 /**
  * Corre `promessa` contra um cronômetro: se `promessa` não resolver dentro de
@@ -334,7 +337,10 @@ function comTimeout<T>(promessa: Promise<T>, ms: number): Promise<T> {
  * payload de callables com fotos de câmera.
  */
 export const analisarRefeicaoIA = onCall(
-  { secrets: [geminiApiKey], region: 'southamerica-east1', cors: true },
+  // timeoutSeconds folgado: o teto real de espera é o TIMEOUT_GEMINI_FOTO_MS
+  // interno (comTimeout) — este só evita que a plataforma corte a requisição
+  // antes disso em caso de cold start lento.
+  { secrets: [geminiApiKey], region: 'southamerica-east1', cors: true, timeoutSeconds: 60 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'É necessário estar logado.');
@@ -378,7 +384,7 @@ export const analisarRefeicaoIA = onCall(
             responseSchema: esquemaAnaliseRefeicao,
           },
         }),
-        TIMEOUT_ANALISE_REFEICAO_MS,
+        TIMEOUT_GEMINI_FOTO_MS,
       );
 
       const texto = resposta.text;
@@ -420,7 +426,7 @@ const TAMANHO_MAXIMO_DESCRICAO = 1000;
  * (texto em vez de imagem) e o prompt.
  */
 export const analisarDescricaoRefeicaoIA = onCall(
-  { secrets: [geminiApiKey], region: 'southamerica-east1', cors: true },
+  { secrets: [geminiApiKey], region: 'southamerica-east1', cors: true, timeoutSeconds: 60 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'É necessário estar logado.');
@@ -465,7 +471,7 @@ export const analisarDescricaoRefeicaoIA = onCall(
             responseSchema: esquemaAnaliseRefeicao,
           },
         }),
-        TIMEOUT_ANALISE_REFEICAO_MS,
+        TIMEOUT_GEMINI_TEXTO_MS,
       );
 
       const texto = resposta.text;

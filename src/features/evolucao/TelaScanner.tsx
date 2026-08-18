@@ -49,8 +49,16 @@ const OPCOES_PERCENTUAL: { rotulo: string; valor: number }[] = [
 
 const CHAVE_PENDING_MEAL_DRAFT = 'pending_meal_draft';
 
-/** Tempo máximo de espera pela análise da IA — depois disso a tela desiste e marca erro, em vez de travar. */
-const TIMEOUT_ANALISE_MS = 15_000;
+/**
+ * Tempo máximo de espera pela análise da IA no cliente — depois disso a tela
+ * desiste e marca erro, em vez de travar. Fica ACIMA do timeout interno da
+ * própria Cloud Function (20s foto / 12s texto): o relógio do cliente começa
+ * a contar antes do cold start da function e (pra foto) do download do
+ * Storage, então precisa de folga pra não estourar antes da function sequer
+ * ter chance de responder com o erro certo.
+ */
+const TIMEOUT_ANALISE_FOTO_MS = 35_000;
+const TIMEOUT_ANALISE_TEXTO_MS = 22_000;
 
 type RespostaAnaliseRefeicao = { items: ItemRefeicaoIA[]; macros: MacrosRefeicao; aiFeedback: string };
 
@@ -122,6 +130,7 @@ export function TelaScanner() {
   async function processarAnalise(
     dadosIniciais: Pick<RegistroRefeicao, 'imageUrl' | 'storagePath' | 'description'>,
     chamarIA: () => Promise<RespostaAnaliseRefeicao>,
+    timeoutMs: number,
   ): Promise<void> {
     if (!uid) return;
     let novoId: string | null = null;
@@ -132,7 +141,7 @@ export function TelaScanner() {
 
       const analise = await comTimeout(
         chamarIA(),
-        TIMEOUT_ANALISE_MS,
+        timeoutMs,
         'A análise demorou demais. Tente novamente.',
       );
 
@@ -167,17 +176,21 @@ export function TelaScanner() {
       // existe nenhum registro no Firestore pra marcar como erro.
       const { imageUrl, storagePath } = await uploadFotoRefeicao(uid, arquivo);
 
-      await processarAnalise({ imageUrl, storagePath, description: null }, async () => {
-        const analisarRefeicaoIA = httpsCallable<
-          { storagePath: string; dietPlanGoals: DietPlanGoals },
-          RespostaAnaliseRefeicao
-        >(getFunctionsCliente(), 'analisarRefeicaoIA');
-        const { data } = await analisarRefeicaoIA({
-          storagePath,
-          dietPlanGoals: planoAtivo ? { title: planoAtivo.title, meals: planoAtivo.meals } : null,
-        });
-        return data;
-      });
+      await processarAnalise(
+        { imageUrl, storagePath, description: null },
+        async () => {
+          const analisarRefeicaoIA = httpsCallable<
+            { storagePath: string; dietPlanGoals: DietPlanGoals },
+            RespostaAnaliseRefeicao
+          >(getFunctionsCliente(), 'analisarRefeicaoIA');
+          const { data } = await analisarRefeicaoIA({
+            storagePath,
+            dietPlanGoals: planoAtivo ? { title: planoAtivo.title, meals: planoAtivo.meals } : null,
+          });
+          return data;
+        },
+        TIMEOUT_ANALISE_FOTO_MS,
+      );
     } catch (falha) {
       console.error('[TelaScanner] falha ao enviar foto', falha);
       setErro('Não foi possível enviar a foto. Tente novamente.');
@@ -193,17 +206,21 @@ export function TelaScanner() {
     setErro(null);
     setIsAnalyzing(true);
     try {
-      await processarAnalise({ imageUrl: null, storagePath: null, description: descricao }, async () => {
-        const analisarDescricaoRefeicaoIA = httpsCallable<
-          { descricao: string; dietPlanGoals: DietPlanGoals },
-          RespostaAnaliseRefeicao
-        >(getFunctionsCliente(), 'analisarDescricaoRefeicaoIA');
-        const { data } = await analisarDescricaoRefeicaoIA({
-          descricao,
-          dietPlanGoals: planoAtivo ? { title: planoAtivo.title, meals: planoAtivo.meals } : null,
-        });
-        return data;
-      });
+      await processarAnalise(
+        { imageUrl: null, storagePath: null, description: descricao },
+        async () => {
+          const analisarDescricaoRefeicaoIA = httpsCallable<
+            { descricao: string; dietPlanGoals: DietPlanGoals },
+            RespostaAnaliseRefeicao
+          >(getFunctionsCliente(), 'analisarDescricaoRefeicaoIA');
+          const { data } = await analisarDescricaoRefeicaoIA({
+            descricao,
+            dietPlanGoals: planoAtivo ? { title: planoAtivo.title, meals: planoAtivo.meals } : null,
+          });
+          return data;
+        },
+        TIMEOUT_ANALISE_TEXTO_MS,
+      );
       setDescricaoTexto('');
       setMostrarCampoTexto(false);
     } catch (falha) {
