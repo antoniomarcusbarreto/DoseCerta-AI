@@ -45,7 +45,11 @@ export function TelaLembretes() {
       setTesteEnviado(true);
     } catch (falha) {
       console.error('[DoseCerta] falha ao testar notificação:', falha);
-      setErroTeste(MENSAGEM_TESTE_ERRO);
+      // Erro do Functions SDK já vem com uma mensagem legível (a que a
+      // própria Cloud Function definiu) — mostrar ela em vez da genérica
+      // ajuda a diagnosticar sem precisar abrir o console do navegador.
+      const mensagem = falha instanceof Error && falha.message ? falha.message : MENSAGEM_TESTE_ERRO;
+      setErroTeste(mensagem);
     } finally {
       setTestando(false);
     }

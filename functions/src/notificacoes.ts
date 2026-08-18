@@ -71,11 +71,20 @@ export const testarNotificacao = onCall({ region: REGIAO, cors: true }, async (r
     throw new HttpsError('unauthenticated', 'É necessário estar logado.');
   }
 
-  const enviados = await enviarParaUsuario(
-    request.auth.uid,
-    'DoseCerta',
-    'Notificação de teste — se você está vendo isso, está tudo funcionando! 🎉',
-  );
+  let enviados: number;
+  try {
+    enviados = await enviarParaUsuario(
+      request.auth.uid,
+      'DoseCerta',
+      'Notificação de teste — se você está vendo isso, está tudo funcionando! 🎉',
+    );
+  } catch (falha) {
+    // Ferramenta de diagnóstico: vale mais mostrar o erro real pro usuário
+    // aqui do que nas rotinas automáticas, onde isso viraria ruído.
+    console.error('[testarNotificacao] falha ao enviar via FCM', request.auth.uid, falha);
+    const detalhe = falha instanceof Error ? falha.message : String(falha);
+    throw new HttpsError('internal', `Falha ao enviar pelo FCM: ${detalhe}`);
+  }
 
   if (enviados === 0) {
     throw new HttpsError(
