@@ -9,9 +9,17 @@ const MENSAGEM_SEM_SUPORTE = 'Este navegador não suporta notificações push.';
 const MENSAGEM_NEGADA = 'Você negou a permissão de notificações. Habilite pelas configurações do navegador.';
 const MENSAGEM_ERRO = 'Não foi possível habilitar as notificações agora. Tente novamente.';
 
+// Escopo próprio (fora de '/'), obrigatório aqui: o app já registra outro
+// service worker em '/' (Workbox, via vite-plugin-pwa) para cache/offline.
+// Registrar o SW do FCM sem escopo dedicado faria as duas registrations
+// colidirem na mesma scope '/' — o navegador entrega o evento `push` só para
+// UM worker ativo por escopo, e não necessariamente para o nosso, então o
+// push chega no servidor mas nunca aparece pro usuário.
+const ESCOPO_SW_MENSAGENS = '/firebase-cloud-messaging-push-scope';
+
 async function registrarSWMensagens(): Promise<ServiceWorkerRegistration | null> {
   if (!('serviceWorker' in navigator)) return null;
-  return navigator.serviceWorker.register('/firebase-messaging-sw.js');
+  return navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: ESCOPO_SW_MENSAGENS });
 }
 
 /**
