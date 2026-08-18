@@ -15,6 +15,13 @@ export default defineConfig({
       filename: 'sw.js',
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        /*
+         * O service worker de push não é asset do app: quem cuida do ciclo de
+         * vida dele é o navegador, ao registrá-lo. Deixá-lo no precache só
+         * guardaria uma cópia paralela que nunca é usada para servir o script
+         * e ainda mascara qual versão está de fato ativa.
+         */
+        globIgnores: ['firebase-messaging-sw.js'],
         navigateFallback: '/index.html',
         /*
          * `/__/auth/*` é o handler de login do Firebase, servido no nosso

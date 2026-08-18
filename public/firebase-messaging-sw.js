@@ -1,34 +1,83 @@
 /* eslint-disable */
-// Service Worker dedicado ao FCM. Fica separado de /sw.js (que só cuida de
-// cache/offline das rotas do próprio app) porque o FCM exige um SW registrado
-// na raiz com esse nome exato, escutando push em segundo plano.
-//
-// Não dá para ler `import.meta.env` aqui — este arquivo é servido estático,
-// sem passar pelo bundler. As chaves abaixo são públicas por natureza (mesmo
-// valor que vai pro bundle do cliente); o que protege os dados são as
-// firestore.rules, não o sigilo desta config. Se o projeto Firebase mudar,
-// atualize os valores aqui junto com o .env.local.
-importScripts('https://www.gstatic.com/firebasejs/11.3.1/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/11.3.1/firebase-messaging-compat.js');
+/*
+ * Service Worker de push, registrado no escopo dedicado
+ * `/firebase-cloud-messaging-push-scope` (o mesmo default do FCM) — separado
+ * de `/sw.js`, que cuida de cache/offline. Dois SWs no MESMO escopo se
+ * substituem, então o escopo próprio é o que permite os dois coexistirem.
+ *
+ * Sem dependência do SDK do Firebase de propósito. A versão anterior fazia
+ * `importScripts` do gstatic e usava `onBackgroundMessage`, o que trazia dois
+ * problemas: (1) se a rede falhasse quando o SW acordasse para um push, o
+ * import quebrava e NENHUMA notificação era exibida — justo no cenário
+ * mobile onde a rede oscila; (2) a versão compat fixada (11.3.1) tinha
+ * divergido da que o app empacota (11.10.0). O push do FCM chega como Web
+ * Push padrão, então dá para tratar o evento `push` cru: menos peças, nada
+ * para carregar em runtime e controle total sobre o `waitUntil`.
+ */
 
-firebase.initializeApp({
-  apiKey: 'AIzaSyBAKYxU99KS4urVzUbgrmpaNM6ClNQPumc',
-  authDomain: 'dosecertaai-edaa2.firebaseapp.com',
-  projectId: 'dosecertaai-edaa2',
-  storageBucket: 'dosecertaai-edaa2.firebasestorage.app',
-  messagingSenderId: '771286000292',
-  appId: '1:771286000292:web:dedc95743ab9f24c14bc31',
+const TITULO_PADRAO = 'DoseCerta';
+const ICONE = '/icons/icon-192.png';
+
+function extrairNotificacao(evento) {
+  if (!evento.data) return null;
+
+  let dados;
+  try {
+    dados = evento.data.json();
+  } catch (erro) {
+    // Payload que não é JSON: ainda melhor mostrar como texto do que engolir.
+    return { titulo: TITULO_PADRAO, corpo: evento.data.text(), link: '/' };
+  }
+
+  const notificacao = dados.notification ?? {};
+  const extras = dados.data ?? {};
+
+  return {
+    titulo: notificacao.title ?? extras.title ?? TITULO_PADRAO,
+    corpo: notificacao.body ?? extras.body ?? '',
+    link: extras.link ?? notificacao.click_action ?? '/',
+  };
+}
+
+self.addEventListener('push', (evento) => {
+  const conteudo = extrairNotificacao(evento);
+  if (!conteudo) return;
+
+  /*
+   * `waitUntil` é obrigatório: sem ele o navegador pode encerrar o worker
+   * antes de `showNotification` resolver, e a notificação simplesmente não
+   * aparece. O iOS é especialmente agressivo nesse encerramento — e ainda
+   * penaliza push que não vira notificação visível, podendo revogar a
+   * inscrição do dispositivo.
+   */
+  evento.waitUntil(
+    self.registration.showNotification(conteudo.titulo, {
+      body: conteudo.corpo,
+      icon: ICONE,
+      badge: ICONE,
+      // Sem tag: cada lembrete é um evento distinto e não deve substituir o
+      // anterior na bandeja.
+      data: { link: conteudo.link },
+    }),
+  );
 });
 
-const messaging = firebase.messaging();
+/** Tocar na notificação foca a aba já aberta, ou abre o app se não houver nenhuma. */
+self.addEventListener('notificationclick', (evento) => {
+  evento.notification.close();
+  const destino = new URL(evento.notification.data?.link ?? '/', self.location.origin).href;
 
-messaging.onBackgroundMessage((payload) => {
-  const titulo = payload.notification?.title ?? 'DoseCerta';
-  const corpo = payload.notification?.body ?? '';
-
-  self.registration.showNotification(titulo, {
-    body: corpo,
-    icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
-  });
+  evento.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((janelas) => {
+      for (const janela of janelas) {
+        if ('focus' in janela) return janela.focus();
+      }
+      return self.clients.openWindow ? self.clients.openWindow(destino) : undefined;
+    }),
+  );
 });
+
+// Assume o controle imediatamente: sem isso, uma versão corrigida do worker
+// só passaria a valer depois que todas as abas fossem fechadas.
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (evento) => evento.waitUntil(self.clients.claim()));

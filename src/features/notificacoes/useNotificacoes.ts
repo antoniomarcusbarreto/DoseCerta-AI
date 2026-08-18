@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { deleteToken, getToken, onMessage, type MessagePayload } from 'firebase/messaging';
+import { deleteToken, getToken } from 'firebase/messaging';
 import { getMessagingCliente } from '@/lib/firebase';
 import { confirmarTokenFcmSalvo, removerTokenFcm, salvarTokenFcm } from '@/lib/firestore';
 import { useAuth } from '@/features/auth/AuthProvider';
@@ -49,30 +49,11 @@ export function useNotificacoes() {
   const [verificando, setVerificando] = useState(true);
   const [tokenConfirmado, setTokenConfirmado] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
-  const [ultimaMensagem, setUltimaMensagem] = useState<MessagePayload | null>(null);
   const [resetando, setResetando] = useState(false);
   // Guardado à parte do estado de React de propósito: só serve pro "Reset
   // Total" saber qual string remover do Firestore, não precisa re-renderizar
   // nada quando muda.
   const ultimoTokenRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    let cancelado = false;
-
-    async function ouvirPrimeiroPlano() {
-      const messaging = await getMessagingCliente();
-      if (!messaging || cancelado) return;
-      return onMessage(messaging, (payload) => {
-        setUltimaMensagem(payload);
-      });
-    }
-
-    const unsubscribePromise = ouvirPrimeiroPlano();
-    return () => {
-      cancelado = true;
-      void unsubscribePromise.then((unsubscribe) => unsubscribe?.());
-    };
-  }, []);
 
   // Núcleo comum de "pegar o token do dispositivo, salvar e confirmar no
   // servidor" — usado tanto pelo clique manual quanto pelo recheck do mount.
@@ -220,7 +201,6 @@ export function useNotificacoes() {
     sincronizando,
     tokenConfirmado,
     erro,
-    ultimaMensagem,
     resetando,
     sincronizarDispositivo,
     resetarNotificacoes,

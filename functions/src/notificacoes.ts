@@ -20,7 +20,25 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
 
   const resposta = await getMessaging().sendEachForMulticast({
     tokens,
+    /*
+     * `notification` no topo é obrigatório: sem ele o iOS trata a mensagem
+     * como data-only e não exibe banner nenhum com o app fechado.
+     * O bloco `webpush` é o que o Web Push realmente consome — repete
+     * título/corpo (o topo sozinho não carrega ícone) e leva o `link` que o
+     * service worker usa ao tocar na notificação. `Urgency: high` evita que
+     * o push fique represado enquanto o dispositivo está ocioso.
+     */
     notification: { title: titulo, body: corpo },
+    webpush: {
+      headers: { Urgency: 'high', TTL: '86400' },
+      notification: {
+        title: titulo,
+        body: corpo,
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+      },
+      fcmOptions: { link: '/' },
+    },
   });
 
   const tokensInvalidos = resposta.responses
