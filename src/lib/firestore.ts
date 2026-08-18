@@ -1,4 +1,5 @@
 import {
+  arrayRemove,
   arrayUnion,
   collection,
   doc,
@@ -460,6 +461,10 @@ export async function confirmarTokenFcmSalvo(uid: string, token: string): Promis
   const tokens = snap.data()?.fcmTokens;
   return Array.isArray(tokens) && tokens.includes(token);
 }
+
+/** Remove um token específico de `fcmTokens` — usado no "Reset de Notificações". */
+export const removerTokenFcm = (uid: string, token: string) =>
+  setDoc(docUsuario(uid), { fcmTokens: arrayRemove(token) }, { merge: true });
 
 export const refPerfil = (uid: string) =>
   doc(getDb(), 'users', uid, 'meta', 'perfil').withConverter(conversorPerfil);

@@ -36,12 +36,15 @@ export function TelaLembretes() {
     sincronizando,
     tokenConfirmado,
     erro,
+    resetando,
     sincronizarDispositivo,
+    resetarNotificacoes,
   } = useNotificacoes();
 
   const [testando, setTestando] = useState(false);
   const [testeEnviado, setTesteEnviado] = useState(false);
   const [erroTeste, setErroTeste] = useState<string | null>(null);
+  const [resetFeito, setResetFeito] = useState(false);
 
   const habilitado = permissao === 'granted' && tokenConfirmado;
   // Permissão já concedida, mas o token ainda não está confirmado no
@@ -72,6 +75,22 @@ export function TelaLembretes() {
     } finally {
       setTestando(false);
     }
+  }
+
+  // Limpeza profunda: apaga o token local (IndexedDB), desregistra todos os
+  // service workers do site e remove o token do Firestore, pra sair de
+  // qualquer estado corrompido antes de recomeçar do zero. Recarrega a
+  // página em seguida — sem isso o SW recém-desregistrado deixaria o app
+  // num limbo até o próximo carregamento natural.
+  async function resetar() {
+    const confirmado = window.confirm(
+      'Isso vai apagar as notificações salvas neste dispositivo e recarregar a página. Continuar?',
+    );
+    if (!confirmado) return;
+
+    await resetarNotificacoes();
+    setResetFeito(true);
+    window.setTimeout(() => window.location.reload(), 1200);
   }
 
   return (
@@ -154,6 +173,32 @@ export function TelaLembretes() {
           ) : null}
         </div>
       </SheetCard>
+
+      {!precisaInstalar ? (
+        <SheetCard titulo="Solução de problemas">
+          <div className="space-y-3">
+            <p className="t-label text-ink-muted">
+              Se as notificações continuarem falhando mesmo depois de sincronizar, isso pode ser um
+              estado corrompido salvo neste navegador. O reset apaga esses dados locais e recarrega
+              a página.
+            </p>
+            <Button
+              variante="fantasma"
+              larguraTotal
+              onClick={() => void resetar()}
+              disabled={resetando}
+              className="text-danger"
+            >
+              {resetando ? 'Limpando…' : 'Reset Total de Notificações'}
+            </Button>
+            {resetFeito ? (
+              <Alerta tom="ok" titulo="Cache de notificações limpo!">
+                Recarregando a página…
+              </Alerta>
+            ) : null}
+          </div>
+        </SheetCard>
+      ) : null}
     </Pagina>
   );
 }

@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
-import { getToken, onMessage, type MessagePayload } from 'firebase/messaging';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { deleteToken, getToken, onMessage, type MessagePayload } from 'firebase/messaging';
 import { getMessagingCliente } from '@/lib/firebase';
-import { confirmarTokenFcmSalvo, salvarTokenFcm } from '@/lib/firestore';
+import { confirmarTokenFcmSalvo, removerTokenFcm, salvarTokenFcm } from '@/lib/firestore';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { detectarIOS } from '@/features/auth/sessao';
 import { useAmbiente } from '@/lib/useAmbiente';
@@ -50,6 +50,11 @@ export function useNotificacoes() {
   const [tokenConfirmado, setTokenConfirmado] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [ultimaMensagem, setUltimaMensagem] = useState<MessagePayload | null>(null);
+  const [resetando, setResetando] = useState(false);
+  // Guardado à parte do estado de React de propósito: só serve pro "Reset
+  // Total" saber qual string remover do Firestore, não precisa re-renderizar
+  // nada quando muda.
+  const ultimoTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelado = false;
@@ -93,6 +98,7 @@ export function useNotificacoes() {
     if (!token) {
       throw new Error('Não foi possível obter o token de notificação deste dispositivo.');
     }
+    ultimoTokenRef.current = token;
 
     await salvarTokenFcm(usuario.uid, token);
 
@@ -167,6 +173,46 @@ export function useNotificacoes() {
     }
   }, [usuario, precisaInstalar, obterEPersistirToken]);
 
+  // "Reset Total": limpeza profunda pra quando o IndexedDB/Service Worker
+  // local fica com estado corrompido e nem `deleteToken`/novo `getToken`
+  // simples resolvem. Cada etapa é best-effort (nunca deixa uma falha
+  // isolada impedir as demais) — o objetivo é sair do jeito mais limpo
+  // possível antes do reload forçado.
+  const resetarNotificacoes = useCallback(async () => {
+    setResetando(true);
+    setErro(null);
+    try {
+      try {
+        const messaging = await getMessagingCliente();
+        if (messaging) await deleteToken(messaging);
+      } catch (falha) {
+        console.warn('[DoseCerta] reset: falha ao apagar token local via deleteToken', falha);
+      }
+
+      try {
+        if ('serviceWorker' in navigator) {
+          const registros = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(registros.map((registro) => registro.unregister()));
+        }
+      } catch (falha) {
+        console.warn('[DoseCerta] reset: falha ao desregistrar service workers', falha);
+      }
+
+      try {
+        if (usuario && ultimoTokenRef.current) {
+          await removerTokenFcm(usuario.uid, ultimoTokenRef.current);
+        }
+      } catch (falha) {
+        console.warn('[DoseCerta] reset: falha ao remover token do Firestore', falha);
+      }
+
+      ultimoTokenRef.current = null;
+      setTokenConfirmado(false);
+    } finally {
+      setResetando(false);
+    }
+  }, [usuario]);
+
   return {
     permissao,
     precisaInstalar,
@@ -175,6 +221,8 @@ export function useNotificacoes() {
     tokenConfirmado,
     erro,
     ultimaMensagem,
+    resetando,
     sincronizarDispositivo,
+    resetarNotificacoes,
   };
 }
