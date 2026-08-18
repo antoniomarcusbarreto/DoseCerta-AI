@@ -18,12 +18,23 @@ const REGIAO = 'southamerica-east1';
 const RP_NAME = 'DoseCerta AI';
 
 /**
- * Precisa bater exatamente com o domínio servido em produção. Sobrescrito
- * localmente (emulador) via `.env` com `WEBAUTHN_RP_ID=localhost` — nesse
- * caso o origin também precisa mudar pra `http://localhost:5173`, o que este
- * arquivo não faz sozinho hoje (ver observação no plano).
+ * Fica no apex de propósito, mesmo com o site servido em `www`: o RP ID só
+ * precisa ser um sufixo registrável da origem, e mantê-lo aqui faz a passkey
+ * valer nos dois hostnames e sobreviver a uma eventual troca de canônico.
+ * No emulador: `WEBAUTHN_RP_ID=localhost`.
  */
 const rpIdParam = defineString('WEBAUTHN_RP_ID', { default: 'dosecerta-ai.com' });
+
+/**
+ * Separado do RP ID porque os dois legitimamente divergem: o WebAuthn exige
+ * correspondência EXATA de origem, e o domínio canônico tem `www` (o apex
+ * responde 308 para ele). Derivar a origem do RP ID, como era feito antes,
+ * gerava `https://dosecerta-ai.com` e reprovava toda cerimônia em produção.
+ * No emulador: `WEBAUTHN_ORIGIN=http://localhost:5173`.
+ */
+const origemParam = defineString('WEBAUTHN_ORIGIN', {
+  default: 'https://www.dosecerta-ai.com',
+});
 
 /** Cerimônia do navegador é síncrona — não faz sentido um TTL longo como o dos códigos por e-mail. */
 const DESAFIO_TTL_MS = 60 * 1000;
@@ -37,8 +48,7 @@ type CredencialArmazenada = {
 };
 
 function origem(): string {
-  const rpID = rpIdParam.value();
-  return rpID === 'localhost' ? 'http://localhost:5173' : `https://${rpID}`;
+  return origemParam.value();
 }
 
 /**
