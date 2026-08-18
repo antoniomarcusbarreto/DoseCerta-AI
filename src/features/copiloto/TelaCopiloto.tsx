@@ -174,7 +174,11 @@ export function TelaCopiloto() {
 
       <header
         className="flex min-h-14 shrink-0 items-center gap-2 border-b px-2 lg:px-4"
-        style={{ background: 'var(--surface-card)', borderColor: 'var(--border-hair)' }}
+        style={{
+          background: 'var(--surface-card)',
+          borderColor: 'var(--border-hair)',
+          paddingTop: 'env(safe-area-inset-top, 0px)',
+        }}
       >
         <button
           type="button"
