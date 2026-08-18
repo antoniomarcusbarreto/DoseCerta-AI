@@ -60,7 +60,15 @@ export function Pagina({ hero, children, lateral, layout = 'painel' }: PaginaPro
               : ''
         }`}
       >
-        <div className="grid gap-4 lg:gap-5">{children}</div>
+        {/*
+         * `[&>*]:min-w-0`: item de grid, por padrão, não encolhe abaixo do
+         * `min-content` do próprio conteúdo — um único card com uma linha
+         * larga demais (ex.: botões que não quebram) estica a coluna inteira,
+         * empurrando todo o resto da tela pra fora da viewport no celular.
+         * Isso zera esse piso, então quem overflow é só o card culpado, nunca
+         * a página toda.
+         */}
+        <div className="grid gap-4 lg:gap-5 [&>*]:min-w-0">{children}</div>
 
         {/*
          * `contents` no celular: o wrapper desaparece da formatação e os cards
@@ -68,7 +76,7 @@ export function Pagina({ hero, children, lateral, layout = 'painel' }: PaginaPro
          * principal. Sem isso o wrapper somaria uma linha de grid e um gap
          * extra, deslocando a tela inteira no celular.
          */}
-        {lateral ? <div className="contents lg:grid lg:gap-5">{lateral}</div> : null}
+        {lateral ? <div className="contents lg:grid lg:gap-5 [&>*]:min-w-0">{lateral}</div> : null}
       </main>
     </div>
   );

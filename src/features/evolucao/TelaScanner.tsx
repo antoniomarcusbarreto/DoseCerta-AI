@@ -353,10 +353,11 @@ export function TelaScanner() {
                   value={descricaoTexto}
                   onChange={(e) => setDescricaoTexto(e.target.value)}
                 />
-                <div className="flex gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row">
                   <Button
                     type="button"
                     variante="fantasma"
+                    className="w-full sm:w-auto"
                     onClick={() => {
                       setMostrarCampoTexto(false);
                       setDescricaoTexto('');
@@ -367,7 +368,7 @@ export function TelaScanner() {
                   <Button
                     type="button"
                     variante="secundaria"
-                    larguraTotal
+                    className="w-full sm:flex-1"
                     disabled={!descricaoTexto.trim()}
                     onClick={handleAnalisarDescricao}
                   >
@@ -415,7 +416,7 @@ export function TelaScanner() {
           titulo="Refeição identificada"
           acao={
             !isEditingMeal ? (
-              <div className="flex gap-2">
+              <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
                 <Button type="button" variante="fantasma" onClick={() => setIsEditingMeal(true)}>
                   ✏️ Editar Itens
                 </Button>
