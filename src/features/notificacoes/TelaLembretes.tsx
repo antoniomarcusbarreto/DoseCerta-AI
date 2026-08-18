@@ -29,13 +29,26 @@ const MENSAGEM_TESTE_ERRO = 'Não foi possível enviar a notificação de teste.
 export function TelaLembretes() {
   const navegar = useNavigate();
   const { isPWA, isMobile } = useAmbiente();
-  const { permissao, precisaInstalar, habilitando, tokenSalvo, erro, habilitar } = useNotificacoes();
+  const {
+    permissao,
+    precisaInstalar,
+    verificando,
+    sincronizando,
+    tokenConfirmado,
+    erro,
+    sincronizarDispositivo,
+  } = useNotificacoes();
 
   const [testando, setTestando] = useState(false);
   const [testeEnviado, setTesteEnviado] = useState(false);
   const [erroTeste, setErroTeste] = useState<string | null>(null);
 
-  const habilitado = permissao === 'granted' && tokenSalvo;
+  const habilitado = permissao === 'granted' && tokenConfirmado;
+  // Permissão já concedida, mas o token ainda não está confirmado no
+  // servidor — não é "nunca pediu" (não faz sentido mostrar "Habilitar"
+  // de novo) nem "já funciona" (o teste ia falhar). É esse terceiro estado
+  // que precisa de um clique explícito do usuário pra tentar de novo.
+  const precisaSincronizar = permissao === 'granted' && !tokenConfirmado && !verificando;
 
   // Notificação push é 100% mobile/PWA aqui — fora disso a tela inteira não
   // faz sentido (nem o aviso de "instale o app", que é redigido pro iOS).
@@ -93,13 +106,27 @@ export function TelaLembretes() {
               Você negou a permissão para este site. Habilite pelas configurações do navegador para
               receber os lembretes.
             </Alerta>
+          ) : verificando ? (
+            <div className="flex min-h-11 items-center">
+              <p className="t-label text-ink-muted">Verificando notificações…</p>
+            </div>
           ) : habilitado ? (
             <Alerta tom="ok" titulo="Notificações habilitadas">
               Você vai receber os lembretes de aplicação, sintomas e check-in neste dispositivo.
             </Alerta>
+          ) : precisaSincronizar ? (
+            <>
+              <Alerta tom="warn" titulo="Sincronize este dispositivo">
+                A permissão já está concedida, mas não conseguimos confirmar o token de notificação
+                no servidor. Toque para tentar de novo.
+              </Alerta>
+              <Button larguraTotal onClick={() => void sincronizarDispositivo()} disabled={sincronizando}>
+                {sincronizando ? 'Sincronizando…' : 'Sincronizar Dispositivo'}
+              </Button>
+            </>
           ) : (
-            <Button larguraTotal onClick={() => void habilitar()} disabled={habilitando}>
-              {habilitando ? 'Habilitando…' : 'Habilitar Notificações'}
+            <Button larguraTotal onClick={() => void sincronizarDispositivo()} disabled={sincronizando}>
+              {sincronizando ? 'Habilitando…' : 'Habilitar Notificações'}
             </Button>
           )}
 

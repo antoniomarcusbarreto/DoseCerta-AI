@@ -2,6 +2,7 @@ import {
   arrayUnion,
   collection,
   doc,
+  getDocFromServer,
   setDoc,
   Timestamp,
   type CollectionReference,
@@ -444,6 +445,21 @@ export const refUsuario = (uid: string) =>
  */
 export const salvarTokenFcm = (uid: string, token: string) =>
   setDoc(docUsuario(uid), { fcmTokens: arrayUnion(token) }, { merge: true });
+
+/**
+ * Confirma no SERVIDOR (não no cache local) que o token está em
+ * `fcmTokens`. O Firestore roda com persistência offline (`persistentLocalCache`
+ * em `src/lib/firebase.ts`), então `setDoc`/`salvarTokenFcm` resolve assim
+ * que a escrita entra no cache local — não quando o servidor confirma. Sem
+ * esse round-trip explícito, a UI pode marcar "habilitado" com o token só
+ * na memória do dispositivo, enquanto a Cloud Function (que só enxerga o
+ * servidor via Admin SDK) não encontra token nenhum.
+ */
+export async function confirmarTokenFcmSalvo(uid: string, token: string): Promise<boolean> {
+  const snap = await getDocFromServer(docUsuario(uid));
+  const tokens = snap.data()?.fcmTokens;
+  return Array.isArray(tokens) && tokens.includes(token);
+}
 
 export const refPerfil = (uid: string) =>
   doc(getDb(), 'users', uid, 'meta', 'perfil').withConverter(conversorPerfil);
