@@ -16,7 +16,10 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
   const docUsuario = db.collection('users').doc(uid);
   const snap = await docUsuario.get();
   const tokens = (snap.data()?.fcmTokens ?? []) as string[];
-  if (tokens.length === 0) return 0;
+  if (tokens.length === 0) {
+    console.log('[enviarParaUsuario]', JSON.stringify({ uid, tokens: 0, enviados: 0 }));
+    return 0;
+  }
 
   const resposta = await getMessaging().sendEachForMulticast({
     tokens,
@@ -51,6 +54,18 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
     });
   }
 
+  // Só contagens e códigos de erro — o token em si nunca vai para o log.
+  console.log(
+    '[enviarParaUsuario]',
+    JSON.stringify({
+      uid,
+      tokens: tokens.length,
+      enviados: resposta.successCount,
+      removidos: tokensInvalidos.length,
+      erros: resposta.responses.filter((r) => !r.success).map((r) => r.error?.code ?? 'desconhecido'),
+    }),
+  );
+
   return resposta.successCount;
 }
 
@@ -61,16 +76,60 @@ function ehTokenInvalido(codigo: string | undefined): boolean {
   );
 }
 
-function inicioDoDia(data: Date): Date {
-  const d = new Date(data);
-  d.setHours(0, 0, 0, 0);
-  return d;
+/**
+ * Deslocamento do fuso de São Paulo, em ms, no instante dado.
+ *
+ * Calculado via `Intl` em vez de fixado em -03:00: o Brasil não usa horário
+ * de verão hoje, mas se voltar a usar isso continua correto sozinho.
+ */
+function deslocamentoFusoMs(instante: Date): number {
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: FUSO,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(instante);
+
+  const campo = (tipo: string) => Number(partes.find((p) => p.type === tipo)?.value ?? 0);
+  const comoSeUTC = Date.UTC(
+    campo('year'),
+    campo('month') - 1,
+    campo('day'),
+    campo('hour'),
+    campo('minute'),
+    campo('second'),
+  );
+
+  return comoSeUTC - instante.getTime();
 }
 
-function fimDoDia(data: Date): Date {
-  const d = new Date(data);
-  d.setHours(23, 59, 59, 999);
-  return d;
+/*
+ * Limites do dia EM SÃO PAULO, não em UTC.
+ *
+ * O `onSchedule` já dispara no fuso certo, mas o runtime das Functions é UTC:
+ * com `setHours` o "dia" ia das 21:00 da véspera às 20:59 do dia corrente.
+ * Na prática, aplicação marcada para depois das 21:00 nunca gerava lembrete,
+ * e água/refeição registrada à noite entrava no total do dia seguinte.
+ *
+ * A conta soma o deslocamento para chegar na hora "de parede", recorta o dia
+ * com `setUTCHours` e desfaz o deslocamento para voltar ao instante real.
+ */
+function inicioDoDia(instante: Date): Date {
+  const deslocamento = deslocamentoFusoMs(instante);
+  const parede = new Date(instante.getTime() + deslocamento);
+  parede.setUTCHours(0, 0, 0, 0);
+  return new Date(parede.getTime() - deslocamento);
+}
+
+function fimDoDia(instante: Date): Date {
+  const deslocamento = deslocamentoFusoMs(instante);
+  const parede = new Date(instante.getTime() + deslocamento);
+  parede.setUTCHours(23, 59, 59, 999);
+  return new Date(parede.getTime() - deslocamento);
 }
 
 /** Extrai o uid do usuário dono de um doc de subcoleção, ex. `users/{uid}/agenda/proxima`. */
@@ -133,20 +192,34 @@ export const lembreteAplicacao = onSchedule(
       .where('proximaEm', '<=', fim)
       .get();
 
+    let jaNotificados = 0;
+    let notificados = 0;
+    let semDispositivo = 0;
+
     for (const doc of snap.docs) {
       const uid = uidDoDoc(doc.ref.path);
       if (!uid) continue;
 
       const notificadaEm = doc.data().notificadaEm as Timestamp | null | undefined;
-      if (notificadaEm && notificadaEm.toDate() >= inicioDoDia(agora)) continue;
+      if (notificadaEm && notificadaEm.toDate() >= inicioDoDia(agora)) {
+        jaNotificados += 1;
+        continue;
+      }
 
-      await enviarParaUsuario(
+      const enviados = await enviarParaUsuario(
         uid,
         'Dia de Dose Certa! 💉',
         'Lembre-se de registrar sua aplicação hoje.',
       );
+      if (enviados > 0) notificados += 1;
+      else semDispositivo += 1;
       await doc.ref.update({ notificadaEm: Timestamp.now() });
     }
+
+    console.log(
+      '[lembreteAplicacao]',
+      JSON.stringify({ agendasHoje: snap.docs.length, jaNotificados, notificados, semDispositivo }),
+    );
   },
 );
 
@@ -157,8 +230,9 @@ export const acompanhamentoSintoma = onSchedule(
   { schedule: '0 10 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
     const db = getFirestore();
-    const ontem = new Date();
-    ontem.setDate(ontem.getDate() - 1);
+    // 24h atrás e depois recortado pelos helpers de fuso — `setDate` aqui
+    // usaria o calendário UTC e cairia no dia errado perto da meia-noite.
+    const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const inicio = Timestamp.fromDate(inicioDoDia(ontem));
     const fim = Timestamp.fromDate(fimDoDia(ontem));
 
@@ -169,17 +243,32 @@ export const acompanhamentoSintoma = onSchedule(
       .get();
 
     const uidsNotificados = new Set<string>();
+    let notificados = 0;
+    let semDispositivo = 0;
+
     for (const doc of snap.docs) {
       const uid = uidDoDoc(doc.ref.path);
       if (!uid || uidsNotificados.has(uid)) continue;
       uidsNotificados.add(uid);
 
-      await enviarParaUsuario(
+      const enviados = await enviarParaUsuario(
         uid,
         'Como você está hoje?',
         'Ontem você relatou desconforto. Seu Co-piloto tem dicas para te ajudar.',
       );
+      if (enviados > 0) notificados += 1;
+      else semDispositivo += 1;
     }
+
+    console.log(
+      '[acompanhamentoSintoma]',
+      JSON.stringify({
+        sintomasOntem: snap.docs.length,
+        usuariosDistintos: uidsNotificados.size,
+        notificados,
+        semDispositivo,
+      }),
+    );
   },
 );
 
@@ -229,17 +318,29 @@ export const hidratacaoMetadeDia = onSchedule(
     const db = getFirestore();
     const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
 
+    let elegiveis = 0;
+    let notificados = 0;
+    let semDispositivo = 0;
+
     for (const usuario of usuarios.docs) {
       const meta = await metaHidratacaoDoUsuario(usuario);
       const total = await totalHidratacaoHoje(usuario.ref);
       if (total >= meta * 0.5) continue;
+      elegiveis += 1;
 
-      await enviarParaUsuario(
+      const enviados = await enviarParaUsuario(
         usuario.id,
         '💧 Hora de beber água',
         'Opa! Já passou do meio-dia e você bebeu pouca água. Que tal um copo agora?',
       );
+      if (enviados > 0) notificados += 1;
+      else semDispositivo += 1;
     }
+
+    console.log(
+      '[hidratacaoMetadeDia]',
+      JSON.stringify({ candidatos: usuarios.size, elegiveis, notificados, semDispositivo }),
+    );
   },
 );
 
@@ -254,18 +355,30 @@ export const hidratacaoRetaFinal = onSchedule(
     const db = getFirestore();
     const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
 
+    let elegiveis = 0;
+    let notificados = 0;
+    let semDispositivo = 0;
+
     for (const usuario of usuarios.docs) {
       const meta = await metaHidratacaoDoUsuario(usuario);
       const total = await totalHidratacaoHoje(usuario.ref);
       if (total < meta * 0.5 || total >= meta) continue;
+      elegiveis += 1;
 
       const faltam = meta - total;
-      await enviarParaUsuario(
+      const enviados = await enviarParaUsuario(
         usuario.id,
         '🏆 Quase lá!',
         `Faltam só ${faltam} ml para bater sua meta de hidratação hoje!`,
       );
+      if (enviados > 0) notificados += 1;
+      else semDispositivo += 1;
     }
+
+    console.log(
+      '[hidratacaoRetaFinal]',
+      JSON.stringify({ candidatos: usuarios.size, elegiveis, notificados, semDispositivo }),
+    );
   },
 );
 
@@ -356,21 +469,37 @@ export const nutricaoAlertaTarde = onSchedule(
     const db = getFirestore();
     const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
 
+    let semMetas = 0;
+    let elegiveis = 0;
+    let notificados = 0;
+    let semDispositivo = 0;
+
     for (const usuario of usuarios.docs) {
       const metas = await metasNutricaoDoUsuario(usuario);
-      if (!metas) continue;
+      if (!metas) {
+        semMetas += 1;
+        continue;
+      }
 
       const consumo = await consumoNutricaoHoje(usuario.ref);
       const proteinaBaixa = metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.5;
       const caloriasBaixas = metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.5;
       if (!proteinaBaixa && !caloriasBaixas) continue;
+      elegiveis += 1;
 
-      await enviarParaUsuario(
+      const enviados = await enviarParaUsuario(
         usuario.id,
         '🍗 Proteja sua massa muscular!',
         'Seu consumo de nutrientes está baixo hoje. Que tal um lanche proteico agora à tarde?',
       );
+      if (enviados > 0) notificados += 1;
+      else semDispositivo += 1;
     }
+
+    console.log(
+      '[nutricaoAlertaTarde]',
+      JSON.stringify({ candidatos: usuarios.size, semMetas, elegiveis, notificados, semDispositivo }),
+    );
   },
 );
 
@@ -385,22 +514,38 @@ export const nutricaoRetaFinal = onSchedule(
     const db = getFirestore();
     const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
 
+    let semMetas = 0;
+    let elegiveis = 0;
+    let notificados = 0;
+    let semDispositivo = 0;
+
     for (const usuario of usuarios.docs) {
       const metas = await metasNutricaoDoUsuario(usuario);
-      if (!metas) continue;
+      if (!metas) {
+        semMetas += 1;
+        continue;
+      }
 
       const consumo = await consumoNutricaoHoje(usuario.ref);
       const proteinaBaixa = metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.8;
       const caloriasCriticas =
         (metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.8) || consumo.kcal < PISO_KCAL_SEGURO;
       if (!proteinaBaixa && !caloriasCriticas) continue;
+      elegiveis += 1;
 
-      await enviarParaUsuario(
+      const enviados = await enviarParaUsuario(
         usuario.id,
         '🥗 Ainda dá tempo de nutrir seu corpo hoje!',
         'Faltam poucas proteínas para sua meta. Um jantar equilibrado faz toda a diferença.',
       );
+      if (enviados > 0) notificados += 1;
+      else semDispositivo += 1;
     }
+
+    console.log(
+      '[nutricaoRetaFinal]',
+      JSON.stringify({ candidatos: usuarios.size, semMetas, elegiveis, notificados, semDispositivo }),
+    );
   },
 );
 
@@ -416,6 +561,9 @@ export const engajamentoRotina = onSchedule(
     const db = getFirestore();
     const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
     const limite = Timestamp.fromDate(new Date(Date.now() - SEMANA_MS));
+    let elegiveis = 0;
+    let notificados = 0;
+    let semDispositivo = 0;
 
     for (const usuario of usuarios.docs) {
       const ultimoPeso = await usuario.ref
@@ -428,12 +576,20 @@ export const engajamentoRotina = onSchedule(
         !ultimoPeso.empty &&
         (ultimoPeso.docs[0].data().recordedAt as Timestamp).toMillis() >= limite.toMillis();
       if (registrouRecente) continue;
+      elegiveis += 1;
 
-      await enviarParaUsuario(
+      const enviados = await enviarParaUsuario(
         usuario.id,
         'Hora do check-in! ⚖️',
         'Que tal registrar seu peso hoje e ver sua evolução?',
       );
+      if (enviados > 0) notificados += 1;
+      else semDispositivo += 1;
     }
+
+    console.log(
+      '[engajamentoRotina]',
+      JSON.stringify({ candidatos: usuarios.size, elegiveis, notificados, semDispositivo }),
+    );
   },
 );
