@@ -67,6 +67,52 @@ export function useNotificacoes() {
     };
   }, []);
 
+  // Núcleo comum de "pegar o token do dispositivo e persistir no Firestore",
+  // usado tanto pelo clique manual (`habilitar`) quanto pelo recheck
+  // silencioso no mount — sem isso, `tokenSalvo` fica só na memória do
+  // componente e o botão "Habilitar" volta a aparecer a cada reload mesmo
+  // com a permissão do navegador já concedida e o token já salvo antes.
+  const obterEPersistirToken = useCallback(async (): Promise<boolean> => {
+    if (!usuario) return false;
+
+    const messaging = await getMessagingCliente();
+    const registro = await registrarSWMensagens();
+    if (!messaging || !registro) return false;
+
+    const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+    const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registro });
+    if (!token) return false;
+
+    await salvarTokenFcm(usuario.uid, token);
+    setTokenSalvo(true);
+    return true;
+  }, [usuario]);
+
+  // Recheck silencioso: se a permissão já está concedida (de uma sessão
+  // anterior), confirma/recupera o token sem exigir um novo clique — e de
+  // quebra corrige o caso em que o token nunca chegou a ser salvo (ex.: bug
+  // de escopo do SW já corrigido). Falha aqui não vira `erro` visível — é
+  // só um recheck em segundo plano, não uma ação que o usuário pediu agora.
+  useEffect(() => {
+    if (!usuario || precisaInstalar) return;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+
+    let cancelado = false;
+    obterEPersistirToken()
+      .then((ok) => {
+        if (!ok && !cancelado) {
+          console.warn('[DoseCerta] permissão de notificação já concedida, mas não foi possível confirmar o token FCM.');
+        }
+      })
+      .catch((falha) => {
+        if (!cancelado) console.warn('[DoseCerta] falha ao reconfirmar token FCM no mount:', falha);
+      });
+
+    return () => {
+      cancelado = true;
+    };
+  }, [usuario, precisaInstalar, obterEPersistirToken]);
+
   const habilitar = useCallback(async () => {
     if (!usuario || precisaInstalar) return;
     if (typeof Notification === 'undefined') {
@@ -84,29 +130,17 @@ export function useNotificacoes() {
         return;
       }
 
-      const messaging = await getMessagingCliente();
-      const registro = await registrarSWMensagens();
-      if (!messaging || !registro) {
-        setErro(MENSAGEM_SEM_SUPORTE);
-        return;
-      }
-
-      const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
-      const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registro });
-      if (!token) {
+      const ok = await obterEPersistirToken();
+      if (!ok) {
         setErro(MENSAGEM_ERRO);
-        return;
       }
-
-      await salvarTokenFcm(usuario.uid, token);
-      setTokenSalvo(true);
     } catch (falha) {
       console.error('[DoseCerta] falha ao habilitar notificações:', falha);
       setErro(MENSAGEM_ERRO);
     } finally {
       setHabilitando(false);
     }
-  }, [usuario, precisaInstalar]);
+  }, [usuario, precisaInstalar, obterEPersistirToken]);
 
   return { permissao, precisaInstalar, habilitando, tokenSalvo, erro, ultimaMensagem, habilitar };
 }
