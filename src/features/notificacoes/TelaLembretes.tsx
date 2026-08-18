@@ -8,6 +8,7 @@ import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
 import { getFunctionsCliente } from '@/lib/firebase';
+import { useAmbiente } from '@/lib/useAmbiente';
 import { useNotificacoes } from './useNotificacoes';
 
 const IconeVoltar = () => (
@@ -27,6 +28,7 @@ const MENSAGEM_TESTE_ERRO = 'Não foi possível enviar a notificação de teste.
 
 export function TelaLembretes() {
   const navegar = useNavigate();
+  const { isPWA, isMobile } = useAmbiente();
   const { permissao, precisaInstalar, habilitando, tokenSalvo, erro, habilitar } = useNotificacoes();
 
   const [testando, setTestando] = useState(false);
@@ -34,6 +36,10 @@ export function TelaLembretes() {
   const [erroTeste, setErroTeste] = useState<string | null>(null);
 
   const habilitado = permissao === 'granted' && tokenSalvo;
+
+  // Notificação push é 100% mobile/PWA aqui — fora disso a tela inteira não
+  // faz sentido (nem o aviso de "instale o app", que é redigido pro iOS).
+  if (!isPWA && !isMobile) return null;
 
   async function testar() {
     setTestando(true);

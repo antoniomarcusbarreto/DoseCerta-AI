@@ -3,7 +3,8 @@ import { getToken, onMessage, type MessagePayload } from 'firebase/messaging';
 import { getMessagingCliente } from '@/lib/firebase';
 import { salvarTokenFcm } from '@/lib/firestore';
 import { useAuth } from '@/features/auth/AuthProvider';
-import { detectarIOS, rodandoComoPWAInstalado } from '@/features/auth/sessao';
+import { detectarIOS } from '@/features/auth/sessao';
+import { useAmbiente } from '@/lib/useAmbiente';
 
 const MENSAGEM_SEM_SUPORTE = 'Este navegador não suporta notificações push.';
 const MENSAGEM_NEGADA = 'Você negou a permissão de notificações. Habilite pelas configurações do navegador.';
@@ -30,14 +31,19 @@ async function registrarSWMensagens(): Promise<ServiceWorkerRegistration | null>
  */
 export function useNotificacoes() {
   const { usuario } = useAuth();
+  const { isPWA, isMobile } = useAmbiente();
   const [permissao, setPermissao] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'denied',
   );
-  // No iOS, a Push API só existe com o app instalado (modo standalone) —
-  // fora disso, pedir permissão fica num estado que nem sempre erra, só não
-  // funciona de verdade. Melhor nem tentar do que deixar o usuário achando
-  // que habilitou.
-  const [precisaInstalar] = useState(() => detectarIOS() && !rodandoComoPWAInstalado());
+  /*
+   * No iOS, a Push API só existe com o app instalado (modo standalone) —
+   * fora disso, pedir permissão fica num estado que nem sempre erra, só não
+   * funciona de verdade. Melhor nem tentar do que deixar o usuário achando
+   * que habilitou. No desktop puro (nem PWA nem mobile) a funcionalidade
+   * inteira fica fora do escopo do produto, então também conta como
+   * "precisa instalar" — é o sinal que a tela usa pra não oferecer o botão.
+   */
+  const precisaInstalar = (!isPWA && !isMobile) || (detectarIOS() && !isPWA);
   const [habilitando, setHabilitando] = useState(false);
   const [tokenSalvo, setTokenSalvo] = useState(false);
   const [erro, setErro] = useState<string | null>(null);

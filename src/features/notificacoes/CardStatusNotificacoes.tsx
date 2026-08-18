@@ -5,6 +5,7 @@ import { Button } from '@/components/Button';
 import { SheetCard } from '@/components/SheetCard';
 import { detectarAndroid, detectarIOS, rodandoComoPWAInstalado } from '@/features/auth/sessao';
 import { aoCapturarPrompt, limparPromptInstalacao, obterPromptInstalacao } from '@/lib/promptInstalacao';
+import { useAmbiente } from '@/lib/useAmbiente';
 
 type Plataforma = 'ios' | 'android' | 'web';
 
@@ -18,11 +19,13 @@ function detectarPlataforma(): Plataforma {
  * Reforço visível assim que o usuário entra em Ajustes: enquanto o app não
  * está instalado ou a permissão de notificação não foi aceita, mostra o que
  * falta — com passos diferentes por plataforma, já que instalar (e pedir
- * permissão) funciona de um jeito no iOS, outro no Android e outro no
- * desktop. Some sozinho assim que os dois requisitos são satisfeitos.
+ * permissão) funciona de um jeito no iOS, outro no Android. Some sozinho
+ * assim que os dois requisitos são satisfeitos, e não aparece fora de
+ * mobile/PWA — notificação push não é uma funcionalidade de desktop aqui.
  */
 export function CardStatusNotificacoes() {
   const navegar = useNavigate();
+  const { isPWA, isMobile } = useAmbiente();
   const plataforma = detectarPlataforma();
 
   const [instalado] = useState(() => rodandoComoPWAInstalado());
@@ -36,6 +39,8 @@ export function CardStatusNotificacoes() {
     if (instalado || plataforma !== 'android') return;
     return aoCapturarPrompt(() => setPromptDisponivel(true));
   }, [instalado, plataforma]);
+
+  if (!isPWA && !isMobile) return null;
 
   async function instalar() {
     const evento = obterPromptInstalacao();

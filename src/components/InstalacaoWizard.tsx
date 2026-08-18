@@ -1,21 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Share, SquarePlus, Smartphone, X } from 'lucide-react';
 import { Button } from '@/components/Button';
-import { detectarIOS, rodandoComoPWAInstalado } from '@/features/auth/sessao';
+import { detectarIOS } from '@/features/auth/sessao';
 import { aoCapturarPrompt, limparPromptInstalacao, obterPromptInstalacao } from '@/lib/promptInstalacao';
+import { useAmbiente } from '@/lib/useAmbiente';
 
 const CHAVE_DISPENSADO = 'instalacao-wizard-dispensado';
 
 type Plataforma = 'ios' | 'android' | null;
 
 export function InstalacaoWizard() {
+  const { isPWA, isMobile } = useAmbiente();
   const [dispensado, setDispensado] = useState(
     () => localStorage.getItem(CHAVE_DISPENSADO) === '1',
   );
   const [plataforma, setPlataforma] = useState<Plataforma>(null);
 
   useEffect(() => {
-    if (rodandoComoPWAInstalado()) return;
+    if (isPWA || !isMobile) return;
 
     if (detectarIOS()) {
       setPlataforma('ios');
@@ -28,7 +30,7 @@ export function InstalacaoWizard() {
     }
 
     return aoCapturarPrompt(() => setPlataforma('android'));
-  }, []);
+  }, [isPWA, isMobile]);
 
   function fechar() {
     localStorage.setItem(CHAVE_DISPENSADO, '1');

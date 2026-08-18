@@ -3,6 +3,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { firebaseConfigurado } from '@/lib/firebase';
 import * as biometriaService from '@/lib/biometriaService';
 import { Carregando } from '@/components/Carregando';
+import { useAmbiente } from '@/lib/useAmbiente';
 import { useAuth } from './AuthProvider';
 
 type Modo = 'entrar' | 'criar';
@@ -42,6 +43,7 @@ function traduzirErroRecuperacao(erro: unknown): string {
 }
 
 export function TelaAuth({ modo }: { modo: Modo }) {
+  const { isPWA, isMobile } = useAmbiente();
   const {
     usuario,
     carregando,
@@ -597,7 +599,10 @@ export function TelaAuth({ modo }: { modo: Modo }) {
             {enviandoGoogle ? 'Aguarde…' : 'Continuar com o Google'}
           </button>
 
-          {!criando && biometriaService.suportaBiometria() && biometriaService.dispositivoTemBiometria() ? (
+          {!criando &&
+          (isPWA || isMobile) &&
+          biometriaService.suportaBiometria() &&
+          biometriaService.dispositivoTemBiometria() ? (
             <button
               type="button"
               onClick={() => void continuarComBiometria()}

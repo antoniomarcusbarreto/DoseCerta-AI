@@ -8,6 +8,7 @@ import { useAuth } from '@/features/auth/AuthProvider';
 import { useDados } from '@/features/dados/DadosProvider';
 import { CardStatusNotificacoes } from '@/features/notificacoes/CardStatusNotificacoes';
 import { useTheme } from '@/features/theme/ThemeProvider';
+import { useAmbiente } from '@/lib/useAmbiente';
 
 type Item = {
   para?: string;
@@ -40,6 +41,7 @@ export function TelaAjustes() {
   const { usuario, sair } = useAuth();
   const { protocolo, medicamentos } = useDados();
   const { theme, setTheme } = useTheme();
+  const { isPWA, isMobile } = useAmbiente();
 
   const itens: Item[] = [
     {
@@ -66,11 +68,17 @@ export function TelaAjustes() {
       titulo: 'Suporte e Feedback',
       descricao: 'Dúvidas, bugs ou sugestões',
     },
-    {
-      para: '/ajustes/lembretes',
-      titulo: 'Lembretes',
-      descricao: 'Notificação no dia da aplicação',
-    },
+    // Notificação push é mobile/PWA-only — no desktop web o link levaria a
+    // uma tela em branco (TelaLembretes também se esconde fora desse caso).
+    ...(isPWA || isMobile
+      ? [
+          {
+            para: '/ajustes/lembretes',
+            titulo: 'Lembretes',
+            descricao: 'Notificação no dia da aplicação',
+          },
+        ]
+      : []),
     {
       para: '/ajustes/meus-dados',
       titulo: 'Meus dados',

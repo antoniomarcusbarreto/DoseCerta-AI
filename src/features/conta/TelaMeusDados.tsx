@@ -10,6 +10,7 @@ import { SheetCard } from '@/components/SheetCard';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { getFunctionsCliente } from '@/lib/firebase';
 import * as biometriaService from '@/lib/biometriaService';
+import { useAmbiente } from '@/lib/useAmbiente';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -49,6 +50,7 @@ function traduzirErroSenha(erro: unknown): string {
 
 export function TelaMeusDados() {
   const navegar = useNavigate();
+  const { isPWA, isMobile } = useAmbiente();
   const [modalExclusaoAberto, setModalExclusaoAberto] = useState(false);
   const [modalSenhaAberto, setModalSenhaAberto] = useState(false);
   const [biometriaHabilitada, setBiometriaHabilitada] = useState(() =>
@@ -120,7 +122,7 @@ export function TelaMeusDados() {
         </ul>
       </SheetCard>
 
-      {biometriaService.suportaBiometria() ? (
+      {(isPWA || isMobile) && biometriaService.suportaBiometria() ? (
         <SheetCard
           titulo="Login biométrico"
           subtitulo="Entre com Face ID, Touch ID ou a biometria do seu celular, sem digitar senha."
