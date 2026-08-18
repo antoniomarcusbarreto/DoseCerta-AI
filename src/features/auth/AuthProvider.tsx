@@ -95,6 +95,36 @@ const MSG_CONTA_SUSPENSA = 'Sua conta foi suspensa. Entre em contato com o supor
 
 const MSG_SENHA_ALTERADA = 'Senha alterada com sucesso. Faça login novamente.';
 
+const MSG_REDIRECT_VAZIO =
+  'O login com o Google não pôde ser concluído neste dispositivo. Tente novamente ou entre com e-mail e senha.';
+
+/**
+ * Marca que saímos daqui rumo ao Google. Sem isto, `getRedirectResult`
+ * devolvendo `null` é indistinguível de "não havia login pendente" — e foi
+ * exatamente esse silêncio que fez o login por redirect falhar sem nenhum
+ * sinal na tela.
+ */
+const CHAVE_REDIRECT_PENDENTE = 'dosecerta:redirect-google-pendente';
+
+function marcarRedirectPendente() {
+  try {
+    localStorage.setItem(CHAVE_REDIRECT_PENDENTE, String(Date.now()));
+  } catch {
+    // Storage bloqueado: seguimos sem o diagnóstico, o login em si não depende disto.
+  }
+}
+
+/** Lê e já consome o marcador — ele vale para uma volta só. */
+function consumirRedirectPendente(): boolean {
+  try {
+    const marcador = localStorage.getItem(CHAVE_REDIRECT_PENDENTE);
+    localStorage.removeItem(CHAVE_REDIRECT_PENDENTE);
+    return marcador !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [usuario, setUsuario] = useState<User | null>(null);
   const [authPronto, setAuthPronto] = useState(false);
@@ -208,12 +238,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!firebaseConfigurado) return;
 
-    getRedirectResult(getAuthCliente())
+    const auth = getAuthCliente();
+
+    getRedirectResult(auth)
       .then(async (resultado) => {
-        if (!resultado) return;
-        await garantirPerfilPosLogin(resultado.user);
+        if (resultado) {
+          consumirRedirectPendente();
+          await garantirPerfilPosLogin(resultado.user);
+          return;
+        }
+        /*
+         * Voltamos de um redirect que tínhamos iniciado, mas o Firebase não
+         * achou credencial nenhuma: o estado pendente se perdeu no caminho
+         * (tipicamente storage particionado quando o handler de auth mora em
+         * outra origem). Sem esta mensagem o usuário só vê o formulário de
+         * login de novo, sem explicação.
+         */
+        if (consumirRedirectPendente() && !auth.currentUser) {
+          console.warn('[DoseCerta] redirect do Google voltou sem credencial.');
+          setMotivoSaida(MSG_REDIRECT_VAZIO);
+        }
       })
       .catch((falha) => {
+        consumirRedirectPendente();
         const pendente = paraVinculoPendente(falha);
         if (pendente) {
           setVinculoPendente(pendente);
@@ -285,6 +332,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // navegador móvel, não só o PWA instalado: é o `signInWithPopup` em
       // contexto mobile que o Google trata como WebView não-confiável e
       // rebaixa para a tela de QR/cross-device.
+      marcarRedirectPendente();
       await signInWithRedirect(auth, provider);
       return;
     }

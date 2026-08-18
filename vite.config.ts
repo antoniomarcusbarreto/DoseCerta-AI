@@ -16,6 +16,14 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         navigateFallback: '/index.html',
+        /*
+         * `/__/auth/*` é o handler de login do Firebase, servido no nosso
+         * domínio por um proxy em vercel.json (ver "self-host the sign-in
+         * helper code" na doc do Firebase). Sem esta exceção o service worker
+         * responderia essas navegações com o index.html cacheado e o login
+         * por redirect nunca se completaria.
+         */
+        navigateFallbackDenylist: [/^\/__\/auth\//],
       },
       devOptions: { enabled: false },
     }),
