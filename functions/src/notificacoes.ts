@@ -46,6 +46,26 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
      * nunca entregou o push" de "o app tem um bug em showNotification".
      */
     data: { uid, enviadoEm: String(enviadoEm) },
+    /*
+     * Bloco `apns` explícito: o iOS descarta o push silenciosamente com o
+     * app em force-close se a prioridade/tipo não vierem declarados aqui,
+     * mesmo em cenário de Web Push. `content-available`/`mutable-content`
+     * (via `contentAvailable`/`mutableContent`) acordam o app em segundo
+     * plano além de exibir o alerta.
+     */
+    apns: {
+      headers: {
+        'apns-priority': '10',
+        'apns-push-type': 'alert',
+      },
+      payload: {
+        aps: {
+          alert: { title: titulo, body: corpo },
+          contentAvailable: true,
+          mutableContent: true,
+        },
+      },
+    },
     webpush: {
       headers: { Urgency: 'high', TTL: '86400' },
       notification: {
@@ -245,30 +265,38 @@ export const lembreteAplicacao = onSchedule(
     let jaNotificados = 0;
     let notificados = 0;
     let semDispositivo = 0;
+    let falhas = 0;
 
     for (const doc of snap.docs) {
       const uid = uidDoDoc(doc.ref.path);
       if (!uid) continue;
 
-      const notificadaEm = comoData(doc.data().notificadaEm);
-      if (notificadaEm && notificadaEm >= inicioDoDia(agora)) {
-        jaNotificados += 1;
-        continue;
-      }
+      try {
+        const notificadaEm = comoData(doc.data().notificadaEm);
+        if (notificadaEm && notificadaEm >= inicioDoDia(agora)) {
+          jaNotificados += 1;
+          continue;
+        }
 
-      const enviados = await enviarParaUsuario(
-        uid,
-        'Dia de Dose Certa! 💉',
-        'Lembre-se de registrar sua aplicação hoje.',
-      );
-      if (enviados > 0) notificados += 1;
-      else semDispositivo += 1;
-      await doc.ref.update({ notificadaEm: Timestamp.now() });
+        const enviados = await enviarParaUsuario(
+          uid,
+          'Dia de Dose Certa! 💉',
+          'Lembre-se de registrar sua aplicação hoje.',
+        );
+        if (enviados > 0) notificados += 1;
+        else semDispositivo += 1;
+        await doc.ref.update({ notificadaEm: Timestamp.now() });
+      } catch (falha) {
+        // Um usuário com dado inesperado não pode zerar o envio da base
+        // inteira — foi assim que um índice ausente virou "ninguém recebeu".
+        falhas += 1;
+        console.error('[lembreteAplicacao] falha ao avaliar usuário', uid, falha);
+      }
     }
 
     console.log(
       '[lembreteAplicacao]',
-      JSON.stringify({ agendasHoje: snap.docs.length, jaNotificados, notificados, semDispositivo }),
+      JSON.stringify({ agendasHoje: snap.docs.length, jaNotificados, notificados, semDispositivo, falhas }),
     );
   },
 );
@@ -295,19 +323,27 @@ export const acompanhamentoSintoma = onSchedule(
     const uidsNotificados = new Set<string>();
     let notificados = 0;
     let semDispositivo = 0;
+    let falhas = 0;
 
     for (const doc of snap.docs) {
       const uid = uidDoDoc(doc.ref.path);
       if (!uid || uidsNotificados.has(uid)) continue;
       uidsNotificados.add(uid);
 
-      const enviados = await enviarParaUsuario(
-        uid,
-        'Como você está hoje?',
-        'Ontem você relatou desconforto. Seu Co-piloto tem dicas para te ajudar.',
-      );
-      if (enviados > 0) notificados += 1;
-      else semDispositivo += 1;
+      try {
+        const enviados = await enviarParaUsuario(
+          uid,
+          'Como você está hoje?',
+          'Ontem você relatou desconforto. Seu Co-piloto tem dicas para te ajudar.',
+        );
+        if (enviados > 0) notificados += 1;
+        else semDispositivo += 1;
+      } catch (falha) {
+        // Um usuário com dado inesperado não pode zerar o envio da base
+        // inteira — foi assim que um índice ausente virou "ninguém recebeu".
+        falhas += 1;
+        console.error('[acompanhamentoSintoma] falha ao avaliar usuário', uid, falha);
+      }
     }
 
     console.log(
@@ -317,6 +353,7 @@ export const acompanhamentoSintoma = onSchedule(
         usuariosDistintos: uidsNotificados.size,
         notificados,
         semDispositivo,
+        falhas,
       }),
     );
   },
