@@ -170,6 +170,17 @@ function uidDoDoc(caminho: string): string | null {
 }
 
 /**
+ * Converte um campo do Firestore em `Date` só quando ele é de fato um
+ * `Timestamp`. Os casts diretos (`campo as Timestamp`) que existiam antes
+ * mentem: o TypeScript aceita, mas se o campo estiver ausente ou vier com
+ * outro tipo o `.toDate()` estoura em runtime — e numa rotina que varre todos
+ * os usuários, um único doc malformado derrubava o envio para a base inteira.
+ */
+function comoData(valor: unknown): Date | null {
+  return valor instanceof Timestamp ? valor.toDate() : null;
+}
+
+/**
  * Dispara uma notificação de teste imediata para o usuário autenticado —
  * usada pelo botão "Testar Notificação" em Ajustes > Lembretes.
  */
@@ -230,8 +241,8 @@ export const lembreteAplicacao = onSchedule(
       const uid = uidDoDoc(doc.ref.path);
       if (!uid) continue;
 
-      const notificadaEm = doc.data().notificadaEm as Timestamp | null | undefined;
-      if (notificadaEm && notificadaEm.toDate() >= inicioDoDia(agora)) {
+      const notificadaEm = comoData(doc.data().notificadaEm);
+      if (notificadaEm && notificadaEm >= inicioDoDia(agora)) {
         jaNotificados += 1;
         continue;
       }
@@ -350,25 +361,33 @@ export const hidratacaoMetadeDia = onSchedule(
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
+    let falhas = 0;
 
     for (const usuario of comToken) {
-      const meta = await metaHidratacaoDoUsuario(usuario);
-      const total = await totalHidratacaoHoje(usuario.ref);
-      if (total >= meta * 0.5) continue;
-      elegiveis += 1;
+      try {
+        const meta = await metaHidratacaoDoUsuario(usuario);
+        const total = await totalHidratacaoHoje(usuario.ref);
+        if (total >= meta * 0.5) continue;
+        elegiveis += 1;
 
-      const enviados = await enviarParaUsuario(
-        usuario.id,
-        '💧 Hora de beber água',
-        'Opa! Já passou do meio-dia e você bebeu pouca água. Que tal um copo agora?',
-      );
-      if (enviados > 0) notificados += 1;
-      else semDispositivo += 1;
+        const enviados = await enviarParaUsuario(
+          usuario.id,
+          '💧 Hora de beber água',
+          'Opa! Já passou do meio-dia e você bebeu pouca água. Que tal um copo agora?',
+        );
+        if (enviados > 0) notificados += 1;
+        else semDispositivo += 1;
+      } catch (falha) {
+        // Um usuário com dado inesperado não pode zerar o envio da base
+        // inteira — foi assim que um índice ausente virou "ninguém recebeu".
+        falhas += 1;
+        console.error('[hidratacaoMetadeDia] falha ao avaliar usuário', usuario.id, falha);
+      }
     }
 
     console.log(
       '[hidratacaoMetadeDia]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas }),
     );
   },
 );
@@ -386,26 +405,34 @@ export const hidratacaoRetaFinal = onSchedule(
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
+    let falhas = 0;
 
     for (const usuario of comToken) {
-      const meta = await metaHidratacaoDoUsuario(usuario);
-      const total = await totalHidratacaoHoje(usuario.ref);
-      if (total < meta * 0.5 || total >= meta) continue;
-      elegiveis += 1;
+      try {
+        const meta = await metaHidratacaoDoUsuario(usuario);
+        const total = await totalHidratacaoHoje(usuario.ref);
+        if (total < meta * 0.5 || total >= meta) continue;
+        elegiveis += 1;
 
-      const faltam = meta - total;
-      const enviados = await enviarParaUsuario(
-        usuario.id,
-        '🏆 Quase lá!',
-        `Faltam só ${faltam} ml para bater sua meta de hidratação hoje!`,
-      );
-      if (enviados > 0) notificados += 1;
-      else semDispositivo += 1;
+        const faltam = meta - total;
+        const enviados = await enviarParaUsuario(
+          usuario.id,
+          '🏆 Quase lá!',
+          `Faltam só ${faltam} ml para bater sua meta de hidratação hoje!`,
+        );
+        if (enviados > 0) notificados += 1;
+        else semDispositivo += 1;
+      } catch (falha) {
+        // Um usuário com dado inesperado não pode zerar o envio da base
+        // inteira — foi assim que um índice ausente virou "ninguém recebeu".
+        falhas += 1;
+        console.error('[hidratacaoRetaFinal] falha ao avaliar usuário', usuario.id, falha);
+      }
     }
 
     console.log(
       '[hidratacaoRetaFinal]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas }),
     );
   },
 );
@@ -468,11 +495,20 @@ async function consumoNutricaoHoje(
   const inicio = Timestamp.fromDate(inicioDoDia(agora));
   const fim = Timestamp.fromDate(fimDoDia(agora));
 
+  /*
+   * O `orderBy` descendente não é decorativo: sem ele o Firestore assume ordem
+   * ascendente e exige um índice `status ASC, createdAt ASC`, que não existe no
+   * projeto. O índice ativo é `status ASC, createdAt DESC`, e a falta desse
+   * alinhamento derrubava as duas rotinas de nutrição todo dia com
+   * FAILED_PRECONDITION, antes de qualquer envio. Como o resultado é uma soma,
+   * a ordem não muda nada — mas remover esta linha quebra a rotina.
+   */
   const snap = await userRef
     .collection('meals')
     .where('status', '==', 'completed')
     .where('createdAt', '>=', inicio)
     .where('createdAt', '<=', fim)
+    .orderBy('createdAt', 'desc')
     .get();
 
   return snap.docs.reduce(
@@ -500,32 +536,40 @@ export const nutricaoAlertaTarde = onSchedule(
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
+    let falhas = 0;
 
     for (const usuario of comToken) {
-      const metas = await metasNutricaoDoUsuario(usuario);
-      if (!metas) {
-        semMetas += 1;
-        continue;
+      try {
+        const metas = await metasNutricaoDoUsuario(usuario);
+        if (!metas) {
+          semMetas += 1;
+          continue;
+        }
+
+        const consumo = await consumoNutricaoHoje(usuario.ref);
+        const proteinaBaixa = metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.5;
+        const caloriasBaixas = metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.5;
+        if (!proteinaBaixa && !caloriasBaixas) continue;
+        elegiveis += 1;
+
+        const enviados = await enviarParaUsuario(
+          usuario.id,
+          '🍗 Proteja sua massa muscular!',
+          'Seu consumo de nutrientes está baixo hoje. Que tal um lanche proteico agora à tarde?',
+        );
+        if (enviados > 0) notificados += 1;
+        else semDispositivo += 1;
+      } catch (falha) {
+        // Um usuário com dado inesperado não pode zerar o envio da base
+        // inteira — foi assim que um índice ausente virou "ninguém recebeu".
+        falhas += 1;
+        console.error('[nutricaoAlertaTarde] falha ao avaliar usuário', usuario.id, falha);
       }
-
-      const consumo = await consumoNutricaoHoje(usuario.ref);
-      const proteinaBaixa = metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.5;
-      const caloriasBaixas = metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.5;
-      if (!proteinaBaixa && !caloriasBaixas) continue;
-      elegiveis += 1;
-
-      const enviados = await enviarParaUsuario(
-        usuario.id,
-        '🍗 Proteja sua massa muscular!',
-        'Seu consumo de nutrientes está baixo hoje. Que tal um lanche proteico agora à tarde?',
-      );
-      if (enviados > 0) notificados += 1;
-      else semDispositivo += 1;
     }
 
     console.log(
       '[nutricaoAlertaTarde]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas }),
     );
   },
 );
@@ -544,33 +588,41 @@ export const nutricaoRetaFinal = onSchedule(
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
+    let falhas = 0;
 
     for (const usuario of comToken) {
-      const metas = await metasNutricaoDoUsuario(usuario);
-      if (!metas) {
-        semMetas += 1;
-        continue;
+      try {
+        const metas = await metasNutricaoDoUsuario(usuario);
+        if (!metas) {
+          semMetas += 1;
+          continue;
+        }
+
+        const consumo = await consumoNutricaoHoje(usuario.ref);
+        const proteinaBaixa = metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.8;
+        const caloriasCriticas =
+          (metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.8) || consumo.kcal < PISO_KCAL_SEGURO;
+        if (!proteinaBaixa && !caloriasCriticas) continue;
+        elegiveis += 1;
+
+        const enviados = await enviarParaUsuario(
+          usuario.id,
+          '🥗 Ainda dá tempo de nutrir seu corpo hoje!',
+          'Faltam poucas proteínas para sua meta. Um jantar equilibrado faz toda a diferença.',
+        );
+        if (enviados > 0) notificados += 1;
+        else semDispositivo += 1;
+      } catch (falha) {
+        // Um usuário com dado inesperado não pode zerar o envio da base
+        // inteira — foi assim que um índice ausente virou "ninguém recebeu".
+        falhas += 1;
+        console.error('[nutricaoRetaFinal] falha ao avaliar usuário', usuario.id, falha);
       }
-
-      const consumo = await consumoNutricaoHoje(usuario.ref);
-      const proteinaBaixa = metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.8;
-      const caloriasCriticas =
-        (metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.8) || consumo.kcal < PISO_KCAL_SEGURO;
-      if (!proteinaBaixa && !caloriasCriticas) continue;
-      elegiveis += 1;
-
-      const enviados = await enviarParaUsuario(
-        usuario.id,
-        '🥗 Ainda dá tempo de nutrir seu corpo hoje!',
-        'Faltam poucas proteínas para sua meta. Um jantar equilibrado faz toda a diferença.',
-      );
-      if (enviados > 0) notificados += 1;
-      else semDispositivo += 1;
     }
 
     console.log(
       '[nutricaoRetaFinal]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas }),
     );
   },
 );
@@ -589,32 +641,38 @@ export const engajamentoRotina = onSchedule(
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
+    let falhas = 0;
 
     for (const usuario of comToken) {
-      const ultimoPeso = await usuario.ref
-        .collection('weight_history')
-        .orderBy('recordedAt', 'desc')
-        .limit(1)
-        .get();
+      try {
+        const ultimoPeso = await usuario.ref
+          .collection('weight_history')
+          .orderBy('recordedAt', 'desc')
+          .limit(1)
+          .get();
 
-      const registrouRecente =
-        !ultimoPeso.empty &&
-        (ultimoPeso.docs[0].data().recordedAt as Timestamp).toMillis() >= limite.toMillis();
-      if (registrouRecente) continue;
-      elegiveis += 1;
+        const registradoEm = ultimoPeso.empty ? null : comoData(ultimoPeso.docs[0].data().recordedAt);
+        if (registradoEm && registradoEm.getTime() >= limite.toMillis()) continue;
+        elegiveis += 1;
 
-      const enviados = await enviarParaUsuario(
-        usuario.id,
-        'Hora do check-in! ⚖️',
-        'Que tal registrar seu peso hoje e ver sua evolução?',
-      );
-      if (enviados > 0) notificados += 1;
-      else semDispositivo += 1;
+        const enviados = await enviarParaUsuario(
+          usuario.id,
+          'Hora do check-in! ⚖️',
+          'Que tal registrar seu peso hoje e ver sua evolução?',
+        );
+        if (enviados > 0) notificados += 1;
+        else semDispositivo += 1;
+      } catch (falha) {
+        // Um usuário com dado inesperado não pode zerar o envio da base
+        // inteira — foi assim que um índice ausente virou "ninguém recebeu".
+        falhas += 1;
+        console.error('[engajamentoRotina] falha ao avaliar usuário', usuario.id, falha);
+      }
     }
 
     console.log(
       '[engajamentoRotina]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas }),
     );
   },
 );
@@ -637,161 +695,236 @@ export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, a
   }
 
   const uid = request.auth.uid;
-  const db = getFirestore();
-  const usuario = await db.collection('users').doc(uid).get();
-  const tokens = usuario.data()?.fcmTokens;
-  const qtdTokens = Array.isArray(tokens) ? tokens.length : 0;
 
-  const varredura = await usuariosComNotificacoes();
-  const achadoPelaVarredura = varredura.comToken.some((doc) => doc.id === uid);
-
-  /*
-   * Teste A/B com a query que as rotinas usavam antes. Se ela não encontrar a
-   * conta que a varredura encontra, está confirmado que o `!=` sobre array era
-   * o problema. `null` = a query nem executou (ex.: índice ausente).
-   */
-  let achadoPelaQueryAntiga: boolean | null;
   try {
-    const antiga = await db.collection('users').where('fcmTokens', '!=', []).get();
-    achadoPelaQueryAntiga = antiga.docs.some((doc) => doc.id === uid);
-  } catch (falha) {
-    console.error('[diagnosticarNotificacoes] query antiga falhou', falha);
-    achadoPelaQueryAntiga = null;
-  }
+    const db = getFirestore();
+    const usuario = await db.collection('users').doc(uid).get();
+    const tokens = usuario.data()?.fcmTokens;
+    const qtdTokens = Array.isArray(tokens) ? tokens.length : 0;
 
-  const agora = new Date();
-  const inicioHoje = inicioDoDia(agora);
-  const fimHoje = fimDoDia(agora);
-  const rotinas: ResultadoRotina[] = [];
+    const varredura = await usuariosComNotificacoes();
+    const achadoPelaVarredura = varredura.comToken.some((doc) => doc.id === uid);
 
-  // --- lembreteAplicacao (08:00) ---
-  const agenda = await usuario.ref.collection('agenda').doc('proxima').get();
-  if (!agenda.exists) {
-    rotinas.push({
-      rotina: 'Lembrete de aplicação (08:00)',
-      dispararia: false,
-      detalhe:
-        'O documento agenda/proxima não existe. Ele só é gravado ao salvar o protocolo ou registrar uma aplicação — abra Ajustes > Tratamento e salve para criá-lo.',
-    });
-  } else {
-    const proximaEm = agenda.data()?.proximaEm as Timestamp | null | undefined;
-    const notificadaEm = agenda.data()?.notificadaEm as Timestamp | null | undefined;
-    if (!proximaEm) {
-      rotinas.push({
-        rotina: 'Lembrete de aplicação (08:00)',
-        dispararia: false,
-        detalhe: 'agenda/proxima existe, mas sem proximaEm calculada.',
-      });
-    } else if (proximaEm.toDate() < inicioHoje || proximaEm.toDate() > fimHoje) {
-      rotinas.push({
-        rotina: 'Lembrete de aplicação (08:00)',
-        dispararia: false,
-        detalhe: `Próxima aplicação em ${emBrt(proximaEm.toDate())} — fora da janela de hoje.`,
-      });
-    } else if (notificadaEm && notificadaEm.toDate() >= inicioHoje) {
-      rotinas.push({
-        rotina: 'Lembrete de aplicação (08:00)',
-        dispararia: false,
-        detalhe: `Aplicação é hoje, mas já foi notificada em ${emBrt(notificadaEm.toDate())}.`,
-      });
-    } else {
-      rotinas.push({
-        rotina: 'Lembrete de aplicação (08:00)',
-        dispararia: true,
-        detalhe: `Aplicação prevista para hoje (${emBrt(proximaEm.toDate())}) e ainda não notificada.`,
-      });
+    /*
+     * Teste A/B com a query que as rotinas usavam antes. Se ela não encontrar a
+     * conta que a varredura encontra, está confirmado que o `!=` sobre array era
+     * o problema. `null` = a query nem executou (ex.: índice ausente).
+     */
+    let achadoPelaQueryAntiga: boolean | null;
+    try {
+      const antiga = await db.collection('users').where('fcmTokens', '!=', []).get();
+      achadoPelaQueryAntiga = antiga.docs.some((doc) => doc.id === uid);
+    } catch (falha) {
+      console.error('[diagnosticarNotificacoes] query antiga falhou', falha);
+      achadoPelaQueryAntiga = null;
     }
+
+    const agora = new Date();
+    const inicioHoje = inicioDoDia(agora);
+    const fimHoje = fimDoDia(agora);
+    const rotinas: ResultadoRotina[] = [];
+
+    /*
+     * Cada bloco é avaliado isolado: se um estourar, ele vira uma linha de erro
+     * legível no relatório em vez de derrubar as outras seis. Era esse o
+     * comportamento anterior — um índice ausente na leitura de refeições
+     * apagava o diagnóstico inteiro e chegava na tela como um "INTERNAL" cego.
+     */
+    const bloco = async (nomes: string[], avaliar: () => Promise<ResultadoRotina[]>) => {
+      try {
+        rotinas.push(...(await avaliar()));
+      } catch (falha) {
+        console.error('[diagnosticarNotificacoes] falha ao avaliar', nomes.join(', '), falha);
+        const detalhe = falha instanceof Error ? falha.message : String(falha);
+        for (const rotina of nomes) {
+          rotinas.push({ rotina, dispararia: false, detalhe: `Erro ao avaliar: ${detalhe}` });
+        }
+      }
+    };
+
+    // --- lembreteAplicacao (08:00) ---
+    const APLICACAO = 'Lembrete de aplicação (08:00)';
+    await bloco([APLICACAO], async () => {
+      const agenda = await usuario.ref.collection('agenda').doc('proxima').get();
+      if (!agenda.exists) {
+        return [
+          {
+            rotina: APLICACAO,
+            dispararia: false,
+            detalhe:
+              'O documento agenda/proxima não existe. Ele só é gravado ao salvar o protocolo ou registrar uma aplicação — abra Ajustes > Tratamento e salve para criá-lo.',
+          },
+        ];
+      }
+
+      const proximaEm = comoData(agenda.data()?.proximaEm);
+      const notificadaEm = comoData(agenda.data()?.notificadaEm);
+      if (!proximaEm) {
+        return [
+          {
+            rotina: APLICACAO,
+            dispararia: false,
+            detalhe: 'agenda/proxima existe, mas sem proximaEm válida gravada.',
+          },
+        ];
+      }
+      if (proximaEm < inicioHoje || proximaEm > fimHoje) {
+        return [
+          {
+            rotina: APLICACAO,
+            dispararia: false,
+            detalhe: `Próxima aplicação em ${emBrt(proximaEm)} — fora da janela de hoje.`,
+          },
+        ];
+      }
+      if (notificadaEm && notificadaEm >= inicioHoje) {
+        return [
+          {
+            rotina: APLICACAO,
+            dispararia: false,
+            detalhe: `Aplicação é hoje, mas já foi notificada em ${emBrt(notificadaEm)}.`,
+          },
+        ];
+      }
+      return [
+        {
+          rotina: APLICACAO,
+          dispararia: true,
+          detalhe: `Aplicação prevista para hoje (${emBrt(proximaEm)}) e ainda não notificada.`,
+        },
+      ];
+    });
+
+    // --- acompanhamentoSintoma (10:00) ---
+    const SINTOMA = 'Acompanhamento de sintoma (10:00)';
+    await bloco([SINTOMA], async () => {
+      const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const sintomas = await usuario.ref
+        .collection('symptom_logs')
+        .where('recordedAt', '>=', Timestamp.fromDate(inicioDoDia(ontem)))
+        .where('recordedAt', '<=', Timestamp.fromDate(fimDoDia(ontem)))
+        .get();
+      return [
+        {
+          rotina: SINTOMA,
+          dispararia: sintomas.size > 0,
+          detalhe: `${sintomas.size} sintoma(s) registrado(s) ontem.`,
+        },
+      ];
+    });
+
+    // --- hidratação (15:00 e 19:00) ---
+    const AGUA_MEIO = 'Hidratação — metade do dia (15:00)';
+    const AGUA_FIM = 'Hidratação — reta final (19:00)';
+    await bloco([AGUA_MEIO, AGUA_FIM], async () => {
+      const meta = await metaHidratacaoDoUsuario(usuario);
+      const bebido = await totalHidratacaoHoje(usuario.ref);
+      const percentual = meta > 0 ? Math.round((bebido / meta) * 100) : 0;
+      const base = `${bebido} ml de ${meta} ml (${percentual}%) hoje.`;
+      return [
+        {
+          rotina: AGUA_MEIO,
+          dispararia: bebido < meta * 0.5,
+          detalhe: `${base} Dispara abaixo de 50%.`,
+        },
+        {
+          rotina: AGUA_FIM,
+          dispararia: bebido >= meta * 0.5 && bebido < meta,
+          detalhe: `${base} Dispara entre 50% e 100%.`,
+        },
+      ];
+    });
+
+    // --- nutrição (16:00 e 20:00) ---
+    const NUTRI_TARDE = 'Nutrição — tarde (16:00)';
+    const NUTRI_FIM = 'Nutrição — reta final (20:00)';
+    await bloco([NUTRI_TARDE, NUTRI_FIM], async () => {
+      const metas = await metasNutricaoDoUsuario(usuario);
+      if (!metas) {
+        const semMeta =
+          'Sem metas de proteína/calorias: não há plano alimentar ativo com metas nem peso registrado para estimá-las.';
+        return [
+          { rotina: NUTRI_TARDE, dispararia: false, detalhe: semMeta },
+          { rotina: NUTRI_FIM, dispararia: false, detalhe: semMeta },
+        ];
+      }
+
+      const consumo = await consumoNutricaoHoje(usuario.ref);
+      const base =
+        `Proteína ${consumo.protein}g de ${metas.proteinGoalG}g; ` +
+        `calorias ${consumo.kcal} de ${metas.kcalGoal} kcal (só refeições confirmadas hoje).`;
+      return [
+        {
+          rotina: NUTRI_TARDE,
+          dispararia:
+            (metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.5) ||
+            (metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.5),
+          detalhe: `${base} Dispara abaixo de 50% em qualquer um dos dois.`,
+        },
+        {
+          rotina: NUTRI_FIM,
+          dispararia:
+            (metas.proteinGoalG > 0 && consumo.protein < metas.proteinGoalG * 0.8) ||
+            (metas.kcalGoal > 0 && consumo.kcal < metas.kcalGoal * 0.8) ||
+            consumo.kcal < PISO_KCAL_SEGURO,
+          detalhe: `${base} Dispara abaixo de 80%, ou abaixo de ${PISO_KCAL_SEGURO} kcal.`,
+        },
+      ];
+    });
+
+    // --- engajamentoRotina (sexta 18:00) ---
+    const PESO = 'Check-in de peso (sexta, 18:00)';
+    await bloco([PESO], async () => {
+      const ultimoPeso = await usuario.ref
+        .collection('weight_history')
+        .orderBy('recordedAt', 'desc')
+        .limit(1)
+        .get();
+
+      if (ultimoPeso.empty) {
+        return [{ rotina: PESO, dispararia: true, detalhe: 'Nenhum peso registrado até hoje.' }];
+      }
+
+      const registradoEm = comoData(ultimoPeso.docs[0].data().recordedAt);
+      if (!registradoEm) {
+        return [
+          {
+            rotina: PESO,
+            dispararia: true,
+            detalhe: 'Há peso registrado, mas sem data válida em recordedAt — tratado como vencido.',
+          },
+        ];
+      }
+      return [
+        {
+          rotina: PESO,
+          dispararia: registradoEm.getTime() < Date.now() - SEMANA_MS,
+          detalhe: `Último peso em ${emBrt(registradoEm)}. Dispara se passar de 7 dias.`,
+        },
+      ];
+    });
+
+    return {
+      dispositivo: {
+        tokens: qtdTokens,
+        achadoPelaVarredura,
+        achadoPelaQueryAntiga,
+        usuariosNaBase: varredura.total,
+        usuariosComToken: varredura.comToken.length,
+      },
+      avaliadoEm: emBrt(agora),
+      rotinas,
+    };
+  } catch (falha) {
+    /*
+     * Sem isto o `onCall` converte qualquer exceção não tratada num "INTERNAL"
+     * sem mensagem — exatamente o que uma ferramenta de diagnóstico não pode
+     * fazer. O cliente já exibe `erro.message`, então o motivo real aparece na
+     * tela em vez de um código cego.
+     */
+    if (falha instanceof HttpsError) throw falha;
+    console.error('[diagnosticarNotificacoes] falha geral', uid, falha);
+    const detalhe = falha instanceof Error ? falha.message : String(falha);
+    throw new HttpsError('internal', `Diagnóstico falhou: ${detalhe}`);
   }
-
-  // --- acompanhamentoSintoma (10:00) ---
-  const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const sintomas = await usuario.ref
-    .collection('symptom_logs')
-    .where('recordedAt', '>=', Timestamp.fromDate(inicioDoDia(ontem)))
-    .where('recordedAt', '<=', Timestamp.fromDate(fimDoDia(ontem)))
-    .get();
-  rotinas.push({
-    rotina: 'Acompanhamento de sintoma (10:00)',
-    dispararia: sintomas.size > 0,
-    detalhe: `${sintomas.size} sintoma(s) registrado(s) ontem.`,
-  });
-
-  // --- hidratação (15:00 e 19:00) ---
-  const metaAgua = await metaHidratacaoDoUsuario(usuario);
-  const totalAgua = await totalHidratacaoHoje(usuario.ref);
-  const percentualAgua = metaAgua > 0 ? Math.round((totalAgua / metaAgua) * 100) : 0;
-  const baseAgua = `${totalAgua} ml de ${metaAgua} ml (${percentualAgua}%) hoje.`;
-  rotinas.push({
-    rotina: 'Hidratação — metade do dia (15:00)',
-    dispararia: totalAgua < metaAgua * 0.5,
-    detalhe: `${baseAgua} Dispara abaixo de 50%.`,
-  });
-  rotinas.push({
-    rotina: 'Hidratação — reta final (19:00)',
-    dispararia: totalAgua >= metaAgua * 0.5 && totalAgua < metaAgua,
-    detalhe: `${baseAgua} Dispara entre 50% e 100%.`,
-  });
-
-  // --- nutrição (16:00 e 20:00) ---
-  const metasNutri = await metasNutricaoDoUsuario(usuario);
-  if (!metasNutri) {
-    const semMeta =
-      'Sem metas de proteína/calorias: não há plano alimentar ativo com metas nem peso registrado para estimá-las.';
-    rotinas.push({ rotina: 'Nutrição — tarde (16:00)', dispararia: false, detalhe: semMeta });
-    rotinas.push({ rotina: 'Nutrição — reta final (20:00)', dispararia: false, detalhe: semMeta });
-  } else {
-    const consumo = await consumoNutricaoHoje(usuario.ref);
-    const baseNutri =
-      `Proteína ${consumo.protein}g de ${metasNutri.proteinGoalG}g; ` +
-      `calorias ${consumo.kcal} de ${metasNutri.kcalGoal} kcal (só refeições confirmadas hoje).`;
-    rotinas.push({
-      rotina: 'Nutrição — tarde (16:00)',
-      dispararia:
-        (metasNutri.proteinGoalG > 0 && consumo.protein < metasNutri.proteinGoalG * 0.5) ||
-        (metasNutri.kcalGoal > 0 && consumo.kcal < metasNutri.kcalGoal * 0.5),
-      detalhe: `${baseNutri} Dispara abaixo de 50% em qualquer um dos dois.`,
-    });
-    rotinas.push({
-      rotina: 'Nutrição — reta final (20:00)',
-      dispararia:
-        (metasNutri.proteinGoalG > 0 && consumo.protein < metasNutri.proteinGoalG * 0.8) ||
-        (metasNutri.kcalGoal > 0 && consumo.kcal < metasNutri.kcalGoal * 0.8) ||
-        consumo.kcal < PISO_KCAL_SEGURO,
-      detalhe: `${baseNutri} Dispara abaixo de 80%, ou abaixo de ${PISO_KCAL_SEGURO} kcal.`,
-    });
-  }
-
-  // --- engajamentoRotina (sexta 18:00) ---
-  const ultimoPeso = await usuario.ref
-    .collection('weight_history')
-    .orderBy('recordedAt', 'desc')
-    .limit(1)
-    .get();
-  const limitePeso = Date.now() - SEMANA_MS;
-  if (ultimoPeso.empty) {
-    rotinas.push({
-      rotina: 'Check-in de peso (sexta, 18:00)',
-      dispararia: true,
-      detalhe: 'Nenhum peso registrado até hoje.',
-    });
-  } else {
-    const registradoEm = (ultimoPeso.docs[0].data().recordedAt as Timestamp).toDate();
-    rotinas.push({
-      rotina: 'Check-in de peso (sexta, 18:00)',
-      dispararia: registradoEm.getTime() < limitePeso,
-      detalhe: `Último peso em ${emBrt(registradoEm)}. Dispara se passar de 7 dias.`,
-    });
-  }
-
-  return {
-    dispositivo: {
-      tokens: qtdTokens,
-      achadoPelaVarredura,
-      achadoPelaQueryAntiga,
-      usuariosNaBase: varredura.total,
-      usuariosComToken: varredura.comToken.length,
-    },
-    avaliadoEm: emBrt(agora),
-    rotinas,
-  };
 });
