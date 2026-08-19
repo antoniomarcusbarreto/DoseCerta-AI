@@ -1,4 +1,9 @@
-import { getFirestore, Timestamp, type QueryDocumentSnapshot } from 'firebase-admin/firestore';
+import {
+  getFirestore,
+  Timestamp,
+  type DocumentSnapshot,
+  type QueryDocumentSnapshot,
+} from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
@@ -74,6 +79,31 @@ function ehTokenInvalido(codigo: string | undefined): boolean {
     codigo === 'messaging/registration-token-not-registered' ||
     codigo === 'messaging/invalid-registration-token'
   );
+}
+
+function temTokens(valor: unknown): boolean {
+  return Array.isArray(valor) && valor.length > 0;
+}
+
+type VarreduraUsuarios = { total: number; comToken: QueryDocumentSnapshot[] };
+
+/**
+ * Usuários com pelo menos um token FCM.
+ *
+ * Varre `users` inteira e filtra em memória, de propósito. A versão anterior
+ * usava `where('fcmTokens', '!=', [])`, e inequalidade sobre campo array é
+ * terreno instável no Firestore — o índice automático de array indexa os
+ * elementos, não o array como valor único, então a query pode não casar com
+ * nada sem acusar erro. Como a falha era silenciosa, não dava para distinguir
+ * "ninguém tem token" de "a query não enxerga ninguém".
+ *
+ * Custo: lê a coleção inteira 7×/dia. Irrelevante na escala atual; se a base
+ * crescer, o caminho é um booleano derivado (ex. `notificacoesAtivas`) mantido
+ * junto com `fcmTokens`, aí a query volta a ser indexável.
+ */
+async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
+  const todos = await getFirestore().collection('users').get();
+  return { total: todos.size, comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)) };
 }
 
 /**
@@ -279,8 +309,8 @@ const META_HIDRATACAO_PADRAO_ML = 2000;
  * Mesma regra de `src/domain/hidratacao.ts` (peso×35ml, com fallback fixo) —
  * duplicada aqui porque `functions/` é outro pacote e não importa `src/`.
  */
-async function metaHidratacaoDoUsuario(usuario: QueryDocumentSnapshot): Promise<number> {
-  const hydrationGoal = usuario.data().hydration_goal;
+async function metaHidratacaoDoUsuario(usuario: DocumentSnapshot): Promise<number> {
+  const hydrationGoal = usuario.data()?.hydration_goal;
   if (typeof hydrationGoal === 'number' && hydrationGoal > 0) return hydrationGoal;
 
   const ultimoPeso = await usuario.ref
@@ -315,14 +345,13 @@ async function totalHidratacaoHoje(userRef: FirebaseFirestore.DocumentReference)
 export const hidratacaoMetadeDia = onSchedule(
   { schedule: '0 15 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const db = getFirestore();
-    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+    const { total, comToken } = await usuariosComNotificacoes();
 
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
 
-    for (const usuario of usuarios.docs) {
+    for (const usuario of comToken) {
       const meta = await metaHidratacaoDoUsuario(usuario);
       const total = await totalHidratacaoHoje(usuario.ref);
       if (total >= meta * 0.5) continue;
@@ -339,7 +368,7 @@ export const hidratacaoMetadeDia = onSchedule(
 
     console.log(
       '[hidratacaoMetadeDia]',
-      JSON.stringify({ candidatos: usuarios.size, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo }),
     );
   },
 );
@@ -352,14 +381,13 @@ export const hidratacaoMetadeDia = onSchedule(
 export const hidratacaoRetaFinal = onSchedule(
   { schedule: '0 19 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const db = getFirestore();
-    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+    const { total, comToken } = await usuariosComNotificacoes();
 
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
 
-    for (const usuario of usuarios.docs) {
+    for (const usuario of comToken) {
       const meta = await metaHidratacaoDoUsuario(usuario);
       const total = await totalHidratacaoHoje(usuario.ref);
       if (total < meta * 0.5 || total >= meta) continue;
@@ -377,7 +405,7 @@ export const hidratacaoRetaFinal = onSchedule(
 
     console.log(
       '[hidratacaoRetaFinal]',
-      JSON.stringify({ candidatos: usuarios.size, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo }),
     );
   },
 );
@@ -398,7 +426,7 @@ type MetasNutricao = { proteinGoalG: number; kcalGoal: number };
  * Retorna `null` quando nem o plano nem o peso dão uma meta pra nenhum dos
  * dois campos — nesse caso não há base pra comparar e o usuário é pulado.
  */
-async function metasNutricaoDoUsuario(usuario: QueryDocumentSnapshot): Promise<MetasNutricao | null> {
+async function metasNutricaoDoUsuario(usuario: DocumentSnapshot): Promise<MetasNutricao | null> {
   const planoAtivo = await usuario.ref
     .collection('diet_plans')
     .where('isActive', '==', true)
@@ -466,15 +494,14 @@ async function consumoNutricaoHoje(
 export const nutricaoAlertaTarde = onSchedule(
   { schedule: '0 16 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const db = getFirestore();
-    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+    const { total, comToken } = await usuariosComNotificacoes();
 
     let semMetas = 0;
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
 
-    for (const usuario of usuarios.docs) {
+    for (const usuario of comToken) {
       const metas = await metasNutricaoDoUsuario(usuario);
       if (!metas) {
         semMetas += 1;
@@ -498,7 +525,7 @@ export const nutricaoAlertaTarde = onSchedule(
 
     console.log(
       '[nutricaoAlertaTarde]',
-      JSON.stringify({ candidatos: usuarios.size, semMetas, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo }),
     );
   },
 );
@@ -511,15 +538,14 @@ export const nutricaoAlertaTarde = onSchedule(
 export const nutricaoRetaFinal = onSchedule(
   { schedule: '0 20 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const db = getFirestore();
-    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+    const { total, comToken } = await usuariosComNotificacoes();
 
     let semMetas = 0;
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
 
-    for (const usuario of usuarios.docs) {
+    for (const usuario of comToken) {
       const metas = await metasNutricaoDoUsuario(usuario);
       if (!metas) {
         semMetas += 1;
@@ -544,7 +570,7 @@ export const nutricaoRetaFinal = onSchedule(
 
     console.log(
       '[nutricaoRetaFinal]',
-      JSON.stringify({ candidatos: usuarios.size, semMetas, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo }),
     );
   },
 );
@@ -558,14 +584,13 @@ const SEMANA_MS = 7 * 24 * 60 * 60 * 1000;
 export const engajamentoRotina = onSchedule(
   { schedule: '0 18 * * 5', timeZone: FUSO, region: REGIAO },
   async () => {
-    const db = getFirestore();
-    const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+    const { total, comToken } = await usuariosComNotificacoes();
     const limite = Timestamp.fromDate(new Date(Date.now() - SEMANA_MS));
     let elegiveis = 0;
     let notificados = 0;
     let semDispositivo = 0;
 
-    for (const usuario of usuarios.docs) {
+    for (const usuario of comToken) {
       const ultimoPeso = await usuario.ref
         .collection('weight_history')
         .orderBy('recordedAt', 'desc')
@@ -589,7 +614,184 @@ export const engajamentoRotina = onSchedule(
 
     console.log(
       '[engajamentoRotina]',
-      JSON.stringify({ candidatos: usuarios.size, elegiveis, notificados, semDispositivo }),
+      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo }),
     );
   },
 );
+
+type ResultadoRotina = { rotina: string; dispararia: boolean; detalhe: string };
+
+const emBrt = (data: Date): string => data.toLocaleString('pt-BR', { timeZone: FUSO });
+
+/**
+ * Fotografia, para a conta de quem chamou, de por que cada rotina agendada
+ * dispararia ou não neste momento — sem enviar push nenhum.
+ *
+ * Existe porque diagnosticar isso pelo Cloud Logging se mostrou inviável: as
+ * rotinas rodam 1×/dia e a leitura de log pela CLI vinha em janelas
+ * inconsistentes. Aqui a resposta chega na tela, na hora.
+ */
+export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'É necessário estar logado.');
+  }
+
+  const uid = request.auth.uid;
+  const db = getFirestore();
+  const usuario = await db.collection('users').doc(uid).get();
+  const tokens = usuario.data()?.fcmTokens;
+  const qtdTokens = Array.isArray(tokens) ? tokens.length : 0;
+
+  const varredura = await usuariosComNotificacoes();
+  const achadoPelaVarredura = varredura.comToken.some((doc) => doc.id === uid);
+
+  /*
+   * Teste A/B com a query que as rotinas usavam antes. Se ela não encontrar a
+   * conta que a varredura encontra, está confirmado que o `!=` sobre array era
+   * o problema. `null` = a query nem executou (ex.: índice ausente).
+   */
+  let achadoPelaQueryAntiga: boolean | null;
+  try {
+    const antiga = await db.collection('users').where('fcmTokens', '!=', []).get();
+    achadoPelaQueryAntiga = antiga.docs.some((doc) => doc.id === uid);
+  } catch (falha) {
+    console.error('[diagnosticarNotificacoes] query antiga falhou', falha);
+    achadoPelaQueryAntiga = null;
+  }
+
+  const agora = new Date();
+  const inicioHoje = inicioDoDia(agora);
+  const fimHoje = fimDoDia(agora);
+  const rotinas: ResultadoRotina[] = [];
+
+  // --- lembreteAplicacao (08:00) ---
+  const agenda = await usuario.ref.collection('agenda').doc('proxima').get();
+  if (!agenda.exists) {
+    rotinas.push({
+      rotina: 'Lembrete de aplicação (08:00)',
+      dispararia: false,
+      detalhe:
+        'O documento agenda/proxima não existe. Ele só é gravado ao salvar o protocolo ou registrar uma aplicação — abra Ajustes > Tratamento e salve para criá-lo.',
+    });
+  } else {
+    const proximaEm = agenda.data()?.proximaEm as Timestamp | null | undefined;
+    const notificadaEm = agenda.data()?.notificadaEm as Timestamp | null | undefined;
+    if (!proximaEm) {
+      rotinas.push({
+        rotina: 'Lembrete de aplicação (08:00)',
+        dispararia: false,
+        detalhe: 'agenda/proxima existe, mas sem proximaEm calculada.',
+      });
+    } else if (proximaEm.toDate() < inicioHoje || proximaEm.toDate() > fimHoje) {
+      rotinas.push({
+        rotina: 'Lembrete de aplicação (08:00)',
+        dispararia: false,
+        detalhe: `Próxima aplicação em ${emBrt(proximaEm.toDate())} — fora da janela de hoje.`,
+      });
+    } else if (notificadaEm && notificadaEm.toDate() >= inicioHoje) {
+      rotinas.push({
+        rotina: 'Lembrete de aplicação (08:00)',
+        dispararia: false,
+        detalhe: `Aplicação é hoje, mas já foi notificada em ${emBrt(notificadaEm.toDate())}.`,
+      });
+    } else {
+      rotinas.push({
+        rotina: 'Lembrete de aplicação (08:00)',
+        dispararia: true,
+        detalhe: `Aplicação prevista para hoje (${emBrt(proximaEm.toDate())}) e ainda não notificada.`,
+      });
+    }
+  }
+
+  // --- acompanhamentoSintoma (10:00) ---
+  const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const sintomas = await usuario.ref
+    .collection('symptom_logs')
+    .where('recordedAt', '>=', Timestamp.fromDate(inicioDoDia(ontem)))
+    .where('recordedAt', '<=', Timestamp.fromDate(fimDoDia(ontem)))
+    .get();
+  rotinas.push({
+    rotina: 'Acompanhamento de sintoma (10:00)',
+    dispararia: sintomas.size > 0,
+    detalhe: `${sintomas.size} sintoma(s) registrado(s) ontem.`,
+  });
+
+  // --- hidratação (15:00 e 19:00) ---
+  const metaAgua = await metaHidratacaoDoUsuario(usuario);
+  const totalAgua = await totalHidratacaoHoje(usuario.ref);
+  const percentualAgua = metaAgua > 0 ? Math.round((totalAgua / metaAgua) * 100) : 0;
+  const baseAgua = `${totalAgua} ml de ${metaAgua} ml (${percentualAgua}%) hoje.`;
+  rotinas.push({
+    rotina: 'Hidratação — metade do dia (15:00)',
+    dispararia: totalAgua < metaAgua * 0.5,
+    detalhe: `${baseAgua} Dispara abaixo de 50%.`,
+  });
+  rotinas.push({
+    rotina: 'Hidratação — reta final (19:00)',
+    dispararia: totalAgua >= metaAgua * 0.5 && totalAgua < metaAgua,
+    detalhe: `${baseAgua} Dispara entre 50% e 100%.`,
+  });
+
+  // --- nutrição (16:00 e 20:00) ---
+  const metasNutri = await metasNutricaoDoUsuario(usuario);
+  if (!metasNutri) {
+    const semMeta =
+      'Sem metas de proteína/calorias: não há plano alimentar ativo com metas nem peso registrado para estimá-las.';
+    rotinas.push({ rotina: 'Nutrição — tarde (16:00)', dispararia: false, detalhe: semMeta });
+    rotinas.push({ rotina: 'Nutrição — reta final (20:00)', dispararia: false, detalhe: semMeta });
+  } else {
+    const consumo = await consumoNutricaoHoje(usuario.ref);
+    const baseNutri =
+      `Proteína ${consumo.protein}g de ${metasNutri.proteinGoalG}g; ` +
+      `calorias ${consumo.kcal} de ${metasNutri.kcalGoal} kcal (só refeições confirmadas hoje).`;
+    rotinas.push({
+      rotina: 'Nutrição — tarde (16:00)',
+      dispararia:
+        (metasNutri.proteinGoalG > 0 && consumo.protein < metasNutri.proteinGoalG * 0.5) ||
+        (metasNutri.kcalGoal > 0 && consumo.kcal < metasNutri.kcalGoal * 0.5),
+      detalhe: `${baseNutri} Dispara abaixo de 50% em qualquer um dos dois.`,
+    });
+    rotinas.push({
+      rotina: 'Nutrição — reta final (20:00)',
+      dispararia:
+        (metasNutri.proteinGoalG > 0 && consumo.protein < metasNutri.proteinGoalG * 0.8) ||
+        (metasNutri.kcalGoal > 0 && consumo.kcal < metasNutri.kcalGoal * 0.8) ||
+        consumo.kcal < PISO_KCAL_SEGURO,
+      detalhe: `${baseNutri} Dispara abaixo de 80%, ou abaixo de ${PISO_KCAL_SEGURO} kcal.`,
+    });
+  }
+
+  // --- engajamentoRotina (sexta 18:00) ---
+  const ultimoPeso = await usuario.ref
+    .collection('weight_history')
+    .orderBy('recordedAt', 'desc')
+    .limit(1)
+    .get();
+  const limitePeso = Date.now() - SEMANA_MS;
+  if (ultimoPeso.empty) {
+    rotinas.push({
+      rotina: 'Check-in de peso (sexta, 18:00)',
+      dispararia: true,
+      detalhe: 'Nenhum peso registrado até hoje.',
+    });
+  } else {
+    const registradoEm = (ultimoPeso.docs[0].data().recordedAt as Timestamp).toDate();
+    rotinas.push({
+      rotina: 'Check-in de peso (sexta, 18:00)',
+      dispararia: registradoEm.getTime() < limitePeso,
+      detalhe: `Último peso em ${emBrt(registradoEm)}. Dispara se passar de 7 dias.`,
+    });
+  }
+
+  return {
+    dispositivo: {
+      tokens: qtdTokens,
+      achadoPelaVarredura,
+      achadoPelaQueryAntiga,
+      usuariosNaBase: varredura.total,
+      usuariosComToken: varredura.comToken.length,
+    },
+    avaliadoEm: emBrt(agora),
+    rotinas,
+  };
+});

@@ -10,6 +10,7 @@ initializeApp();
 export { chatCopiloto } from './chat.js';
 export {
   testarNotificacao,
+  diagnosticarNotificacoes,
   lembreteAplicacao,
   acompanhamentoSintoma,
   engajamentoRotina,

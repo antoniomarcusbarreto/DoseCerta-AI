@@ -26,6 +26,18 @@ const IconeVoltar = () => (
 
 const MENSAGEM_TESTE_ERRO = 'Não foi possível enviar a notificação de teste. Tente novamente.';
 
+type Diagnostico = {
+  dispositivo: {
+    tokens: number;
+    achadoPelaVarredura: boolean;
+    achadoPelaQueryAntiga: boolean | null;
+    usuariosNaBase: number;
+    usuariosComToken: number;
+  };
+  avaliadoEm: string;
+  rotinas: { rotina: string; dispararia: boolean; detalhe: string }[];
+};
+
 export function TelaLembretes() {
   const navegar = useNavigate();
   const { isPWA, isMobile } = useAmbiente();
@@ -45,6 +57,9 @@ export function TelaLembretes() {
   const [testeEnviado, setTesteEnviado] = useState(false);
   const [erroTeste, setErroTeste] = useState<string | null>(null);
   const [resetFeito, setResetFeito] = useState(false);
+  const [diagnosticando, setDiagnosticando] = useState(false);
+  const [diagnostico, setDiagnostico] = useState<Diagnostico | null>(null);
+  const [erroDiagnostico, setErroDiagnostico] = useState<string | null>(null);
 
   const habilitado = permissao === 'granted' && tokenConfirmado;
   // Permissão já concedida, mas o token ainda não está confirmado no
@@ -91,6 +106,23 @@ export function TelaLembretes() {
     await resetarNotificacoes();
     setResetFeito(true);
     window.setTimeout(() => window.location.reload(), 1200);
+  }
+
+  async function diagnosticar() {
+    setDiagnosticando(true);
+    setErroDiagnostico(null);
+    try {
+      const chamar = httpsCallable<void, Diagnostico>(getFunctionsCliente(), 'diagnosticarNotificacoes');
+      const resposta = await chamar();
+      setDiagnostico(resposta.data);
+    } catch (falha) {
+      console.error('[DoseCerta] falha ao diagnosticar notificações:', falha);
+      setErroDiagnostico(
+        falha instanceof Error && falha.message ? falha.message : 'Não foi possível diagnosticar.',
+      );
+    } finally {
+      setDiagnosticando(false);
+    }
   }
 
   return (
@@ -195,6 +227,64 @@ export function TelaLembretes() {
               <Alerta tom="ok" titulo="Cache de notificações limpo!">
                 Recarregando a página…
               </Alerta>
+            ) : null}
+
+            <div className="border-t pt-3" style={{ borderColor: 'var(--border-hair)' }}>
+              <p className="t-label text-ink-muted">
+                O diagnóstico mostra, sem enviar nada, se o servidor enxerga este dispositivo e por
+                que cada lembrete automático dispararia ou não agora.
+              </p>
+              <div className="mt-3">
+                <Button
+                  variante="secundaria"
+                  larguraTotal
+                  onClick={() => void diagnosticar()}
+                  disabled={diagnosticando}
+                >
+                  {diagnosticando ? 'Diagnosticando…' : 'Diagnosticar rotinas'}
+                </Button>
+              </div>
+            </div>
+
+            {erroDiagnostico ? <Alerta tom="danger" titulo={erroDiagnostico} /> : null}
+
+            {diagnostico ? (
+              <div className="space-y-3">
+                <div
+                  className="p-3"
+                  style={{ background: 'var(--surface-sunken)', borderRadius: 'var(--r-field)' }}
+                >
+                  <p className="t-label text-ink">Dispositivo</p>
+                  <p className="t-caption mt-1 text-ink-muted">
+                    {diagnostico.dispositivo.tokens} token(s) salvo(s) ·{' '}
+                    {diagnostico.dispositivo.achadoPelaVarredura
+                      ? 'o servidor encontra esta conta'
+                      : 'o servidor NÃO encontra esta conta'}
+                  </p>
+                  <p className="t-caption mt-0.5 text-ink-faint">
+                    Base: {diagnostico.dispositivo.usuariosComToken} de{' '}
+                    {diagnostico.dispositivo.usuariosNaBase} conta(s) com notificação · query antiga:{' '}
+                    {diagnostico.dispositivo.achadoPelaQueryAntiga === null
+                      ? 'falhou'
+                      : diagnostico.dispositivo.achadoPelaQueryAntiga
+                        ? 'encontrava'
+                        : 'NÃO encontrava'}
+                  </p>
+                </div>
+
+                <ul className="space-y-2">
+                  {diagnostico.rotinas.map((item) => (
+                    <li key={item.rotina}>
+                      <p className="t-label text-ink">
+                        {item.dispararia ? '✅' : '⛔'} {item.rotina}
+                      </p>
+                      <p className="t-caption mt-0.5 text-ink-muted">{item.detalhe}</p>
+                    </li>
+                  ))}
+                </ul>
+
+                <p className="t-caption text-ink-faint">Avaliado em {diagnostico.avaliadoEm}</p>
+              </div>
             ) : null}
           </div>
         </SheetCard>
