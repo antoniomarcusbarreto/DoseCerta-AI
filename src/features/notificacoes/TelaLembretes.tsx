@@ -33,6 +33,9 @@ type Diagnostico = {
     achadoPelaQueryAntiga: boolean | null;
     usuariosNaBase: number;
     usuariosComToken: number;
+    ultimoPushEnviadoEm: string | null;
+    ultimoPushRecebidoEm: string | null;
+    atrasoMs: number | null;
   };
   avaliadoEm: string;
   rotinas: { rotina: string; dispararia: boolean; detalhe: string }[];
@@ -269,6 +272,13 @@ export function TelaLembretes() {
                       : diagnostico.dispositivo.achadoPelaQueryAntiga
                         ? 'encontrava'
                         : 'NÃO encontrava'}
+                  </p>
+                  <p className="t-caption mt-0.5 text-ink-faint">
+                    Último push enviado: {diagnostico.dispositivo.ultimoPushEnviadoEm ?? 'nunca'} · recebido
+                    pelo dispositivo: {diagnostico.dispositivo.ultimoPushRecebidoEm ?? 'nunca'}
+                    {diagnostico.dispositivo.atrasoMs !== null
+                      ? ` (atraso de ${Math.round(diagnostico.dispositivo.atrasoMs / 1000)}s)`
+                      : ''}
                   </p>
                 </div>
 

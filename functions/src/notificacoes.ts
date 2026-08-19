@@ -5,7 +5,7 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
-import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 
 const REGIAO = 'southamerica-east1';
@@ -26,6 +26,8 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
     return 0;
   }
 
+  const enviadoEm = Date.now();
+
   const resposta = await getMessaging().sendEachForMulticast({
     tokens,
     /*
@@ -37,6 +39,13 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
      * o push fique represado enquanto o dispositivo está ocioso.
      */
     notification: { title: titulo, body: corpo },
+    /*
+     * `data` viaja junto com o payload até o Service Worker (evento `push`
+     * cru, sem SDK). É o que permite ao SW confirmar de volta pro servidor
+     * "eu acordei e recebi isto" — sem isso não dá pra distinguir "o iOS
+     * nunca entregou o push" de "o app tem um bug em showNotification".
+     */
+    data: { uid, enviadoEm: String(enviadoEm) },
     webpush: {
       headers: { Urgency: 'high', TTL: '86400' },
       notification: {
@@ -904,6 +913,22 @@ export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, a
       ];
     });
 
+    /*
+     * `ultimoPushEnviadoEm`/`ultimoPushRecebidoEm` são gravados pelo par
+     * enviarParaUsuario → confirmarRecebimentoPush (Service Worker chamando
+     * de volta ao acordar). Se o envio existe mas o recebimento nunca chegou
+     * (ou é de outro dia), o push confirmadamente saiu do servidor e morreu
+     * em algum lugar fora do nosso código — iOS/APNs, Foco, Baixo Consumo.
+     * Se os dois batem, o problema (se houver) está no app, não na entrega.
+     */
+    const dadosUsuario = usuario.data();
+    const ultimoPushEnviadoEm = comoData(dadosUsuario?.ultimoPushEnviadoEm);
+    const ultimoPushRecebidoEm = comoData(dadosUsuario?.ultimoPushRecebidoEm);
+    const atrasoMs =
+      ultimoPushEnviadoEm && ultimoPushRecebidoEm
+        ? ultimoPushRecebidoEm.getTime() - ultimoPushEnviadoEm.getTime()
+        : null;
+
     return {
       dispositivo: {
         tokens: qtdTokens,
@@ -911,6 +936,9 @@ export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, a
         achadoPelaQueryAntiga,
         usuariosNaBase: varredura.total,
         usuariosComToken: varredura.comToken.length,
+        ultimoPushEnviadoEm: ultimoPushEnviadoEm ? emBrt(ultimoPushEnviadoEm) : null,
+        ultimoPushRecebidoEm: ultimoPushRecebidoEm ? emBrt(ultimoPushRecebidoEm) : null,
+        atrasoMs,
       },
       avaliadoEm: emBrt(agora),
       rotinas,
@@ -926,5 +954,48 @@ export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, a
     console.error('[diagnosticarNotificacoes] falha geral', uid, falha);
     const detalhe = falha instanceof Error ? falha.message : String(falha);
     throw new HttpsError('internal', `Diagnóstico falhou: ${detalhe}`);
+  }
+});
+
+/**
+ * Recebe a confirmação de que o Service Worker acordou e exibiu um push.
+ * É `onRequest` (sem auth) porque o SW dispara isso a partir do evento
+ * `push`, que não tem sessão de usuário — não há como chamar um `onCall`
+ * dali. A gravação em `users/{uid}` é o que permite ao diagnóstico provar,
+ * depois, se um push confirmadamente enviado pelo servidor chegou ou não
+ * a acordar o dispositivo.
+ */
+export const confirmarRecebimentoPush = onRequest({ region: REGIAO, cors: true }, async (request, response) => {
+  if (request.method !== 'POST') {
+    response.status(405).send('Method Not Allowed');
+    return;
+  }
+
+  const { uid, enviadoEm } = (request.body ?? {}) as { uid?: unknown; enviadoEm?: unknown };
+  if (typeof uid !== 'string' || uid.trim().length === 0) {
+    response.status(400).send('uid inválido');
+    return;
+  }
+
+  try {
+    const db = getFirestore();
+    const docUsuario = db.collection('users').doc(uid);
+    const existe = (await docUsuario.get()).exists;
+    if (!existe) {
+      response.status(404).send('usuário não encontrado');
+      return;
+    }
+
+    const epochEnviadoEm = typeof enviadoEm === 'string' ? Number(enviadoEm) : Number(enviadoEm);
+    const dados: Record<string, unknown> = { ultimoPushRecebidoEm: Timestamp.now() };
+    if (Number.isFinite(epochEnviadoEm)) {
+      dados.ultimoPushEnviadoEm = Timestamp.fromMillis(epochEnviadoEm);
+    }
+
+    await docUsuario.update(dados);
+    response.status(204).send();
+  } catch (falha) {
+    console.error('[confirmarRecebimentoPush] falha', uid, falha);
+    response.status(500).send('erro interno');
   }
 });

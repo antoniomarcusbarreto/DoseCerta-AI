@@ -18,6 +18,7 @@ export {
   hidratacaoRetaFinal,
   nutricaoAlertaTarde,
   nutricaoRetaFinal,
+  confirmarRecebimentoPush,
 } from './notificacoes.js';
 export { excluirContaUsuario } from './conta.js';
 export { enviarCodigoRecuperacao, redefinirSenhaComCodigo } from './recuperacaoSenha.js';

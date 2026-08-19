@@ -17,6 +17,7 @@
 
 const TITULO_PADRAO = 'DoseCerta';
 const ICONE = '/icons/icon-192.png';
+const URL_CONFIRMACAO = 'https://southamerica-east1-dosecertaai-edaa2.cloudfunctions.net/confirmarRecebimentoPush';
 
 function extrairNotificacao(evento) {
   if (!evento.data) return null;
@@ -26,7 +27,7 @@ function extrairNotificacao(evento) {
     dados = evento.data.json();
   } catch (erro) {
     // Payload que não é JSON: ainda melhor mostrar como texto do que engolir.
-    return { titulo: TITULO_PADRAO, corpo: evento.data.text(), link: '/' };
+    return { titulo: TITULO_PADRAO, corpo: evento.data.text(), link: '/', uid: null, enviadoEm: null };
   }
 
   const notificacao = dados.notification ?? {};
@@ -36,7 +37,26 @@ function extrairNotificacao(evento) {
     titulo: notificacao.title ?? extras.title ?? TITULO_PADRAO,
     corpo: notificacao.body ?? extras.body ?? '',
     link: extras.link ?? notificacao.click_action ?? '/',
+    uid: extras.uid ?? null,
+    enviadoEm: extras.enviadoEm ?? null,
   };
+}
+
+/*
+ * Best-effort: confirma ao servidor que este dispositivo acordou e recebeu
+ * o push, para o diagnóstico conseguir provar depois se um envio confirmado
+ * pelo FCM chegou a acordar o Service Worker ou morreu antes disso (iOS/APNs,
+ * Foco, Baixo Consumo). Nunca deve impedir `showNotification` — por isso o
+ * `catch` engole qualquer falha de rede/CORS em silêncio.
+ */
+function confirmarRecebimento(uid, enviadoEm) {
+  if (!uid) return Promise.resolve();
+  return fetch(URL_CONFIRMACAO, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    keepalive: true,
+    body: JSON.stringify({ uid, enviadoEm }),
+  }).catch(() => {});
 }
 
 self.addEventListener('push', (evento) => {
@@ -51,14 +71,17 @@ self.addEventListener('push', (evento) => {
    * inscrição do dispositivo.
    */
   evento.waitUntil(
-    self.registration.showNotification(conteudo.titulo, {
-      body: conteudo.corpo,
-      icon: ICONE,
-      badge: ICONE,
-      // Sem tag: cada lembrete é um evento distinto e não deve substituir o
-      // anterior na bandeja.
-      data: { link: conteudo.link },
-    }),
+    Promise.all([
+      self.registration.showNotification(conteudo.titulo, {
+        body: conteudo.corpo,
+        icon: ICONE,
+        badge: ICONE,
+        // Sem tag: cada lembrete é um evento distinto e não deve substituir o
+        // anterior na bandeja.
+        data: { link: conteudo.link },
+      }),
+      confirmarRecebimento(conteudo.uid, conteudo.enviadoEm),
+    ]),
   );
 });
 
