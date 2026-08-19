@@ -1,4 +1,4 @@
-import type { MacrosRefeicao } from './tipos';
+import type { ItemRefeicaoIA, MacrosRefeicao } from './tipos';
 
 export function macrosProporcionais(macros: MacrosRefeicao, percentual: number): MacrosRefeicao {
   return {
@@ -7,6 +7,19 @@ export function macrosProporcionais(macros: MacrosRefeicao, percentual: number):
     fat: Math.round(macros.fat * percentual),
     kcal: Math.round(macros.kcal * percentual),
   };
+}
+
+/** Soma os macros de cada item — usado para recalcular o total da refeição depois que o usuário edita/exclui/adiciona itens. */
+export function somarMacrosItens(items: ItemRefeicaoIA[]): MacrosRefeicao {
+  return items.reduce(
+    (total, item) => ({
+      protein: total.protein + (item.protein || 0),
+      carbs: total.carbs + (item.carbs || 0),
+      fat: total.fat + (item.fat || 0),
+      kcal: total.kcal + (item.calories || 0),
+    }),
+    { protein: 0, carbs: 0, fat: 0, kcal: 0 },
+  );
 }
 
 const PROTEINA_G_POR_KG = 1.35;

@@ -10,6 +10,7 @@ import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
 import { useConfirm } from '@/contexts/ConfirmContext';
+import { somarMacrosItens } from '@/domain/refeicao';
 import type { ItemRefeicaoIA, MacrosRefeicao, RegistroRefeicao } from '@/domain/tipos';
 import { CardRefeicao } from '@/features/evolucao/CardRefeicao';
 import { useDados } from '@/features/dados/DadosProvider';
@@ -40,6 +41,23 @@ const IconeVoltar = () => (
     />
   </svg>
 );
+
+const IconeLixeira = () => (
+  <svg viewBox="0 0 24 24" className="size-4" aria-hidden="true">
+    <path
+      d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-9 0 1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+function itemVazio(): ItemRefeicaoIA {
+  return { name: '', quantity: '', calories: 0, protein: 0, carbs: 0, fat: 0 };
+}
 
 const OPCOES_PERCENTUAL: { rotulo: string; valor: number }[] = [
   { rotulo: 'Comi Tudo (100%)', valor: 1 },
@@ -255,16 +273,40 @@ export function TelaScanner() {
     }
   }
 
-  function atualizarItemEmEdicao(indice: number, campo: keyof ItemRefeicaoIA, valor: string) {
+  function atualizarItemEmEdicao(indice: number, campo: 'name' | 'quantity', valor: string) {
     setItensEmEdicao((atual) =>
       atual.map((item, i) => (i === indice ? { ...item, [campo]: valor } : item)),
     );
   }
 
+  function atualizarMacroItemEmEdicao(
+    indice: number,
+    campo: 'calories' | 'protein' | 'carbs' | 'fat',
+    valor: string,
+  ) {
+    const numero = Number(valor);
+    setItensEmEdicao((atual) =>
+      atual.map((item, i) => (i === indice ? { ...item, [campo]: Number.isNaN(numero) ? 0 : numero } : item)),
+    );
+  }
+
+  function adicionarItemEmEdicao() {
+    setItensEmEdicao((atual) => [...atual, itemVazio()]);
+  }
+
+  function removerItemEmEdicao(indice: number) {
+    setItensEmEdicao((atual) => atual.filter((_, i) => i !== indice));
+  }
+
   async function concluirEdicaoItens() {
     if (uid && pendingMealId) {
       try {
-        await atualizarItensRefeicaoPendente(uid, pendingMealId, itensEmEdicao);
+        await atualizarItensRefeicaoPendente(
+          uid,
+          pendingMealId,
+          itensEmEdicao,
+          somarMacrosItens(itensEmEdicao),
+        );
       } catch (falha) {
         console.error('[TelaScanner] falha ao salvar itens editados', falha);
         setErro('Não foi possível salvar os itens editados. Tente novamente.');
@@ -325,6 +367,7 @@ export function TelaScanner() {
               ref={inputRef}
               type="file"
               accept="image/*"
+              capture="environment"
               hidden
               onChange={handleFileUpload}
             />
@@ -428,26 +471,15 @@ export function TelaScanner() {
           }
         >
           <div className="flex flex-col gap-4">
-            <div className="flex gap-3">
-              {pendingMeal.imageUrl ? (
-                <img
-                  src={pendingMeal.imageUrl}
-                  alt="Foto do prato escaneado"
-                  className="size-20 shrink-0 rounded-xl object-cover"
-                />
-              ) : (
-                <div
-                  className="flex size-20 shrink-0 items-center justify-center rounded-xl text-2xl"
-                  style={{ background: 'var(--surface-sunken)' }}
-                  title={pendingMeal.description ?? undefined}
-                >
-                  ✍️
-                </div>
-              )}
-              {isEditingMeal ? (
-                <div className="flex flex-1 flex-col gap-2">
-                  {itensEmEdicao.map((item, indice) => (
-                    <div key={indice} className="flex gap-2">
+            {isEditingMeal ? (
+              <div className="flex flex-col gap-3">
+                {itensEmEdicao.map((item, indice) => (
+                  <div
+                    key={indice}
+                    className="flex flex-col gap-2 rounded-xl border p-3"
+                    style={{ borderColor: 'var(--border-hair)' }}
+                  >
+                    <div className="flex items-end gap-2">
                       <Field
                         rotulo="Item"
                         value={item.name}
@@ -460,13 +492,73 @@ export function TelaScanner() {
                         onChange={(e) => atualizarItemEmEdicao(indice, 'quantity', e.target.value)}
                         className="w-24"
                       />
+                      <button
+                        type="button"
+                        aria-label="Excluir item"
+                        className="mb-0.5 shrink-0 rounded-full p-1.5"
+                        style={{ color: 'var(--danger)' }}
+                        onClick={() => removerItemEmEdicao(indice)}
+                      >
+                        <IconeLixeira />
+                      </button>
                     </div>
-                  ))}
-                  <Button type="button" variante="secundaria" onClick={concluirEdicaoItens}>
-                    Concluir Edição
-                  </Button>
-                </div>
-              ) : (
+                    <div className="grid grid-cols-4 gap-2">
+                      <Field
+                        rotulo="Kcal"
+                        type="number"
+                        inputMode="decimal"
+                        value={String(item.calories)}
+                        onChange={(e) => atualizarMacroItemEmEdicao(indice, 'calories', e.target.value)}
+                      />
+                      <Field
+                        rotulo="Prot (g)"
+                        type="number"
+                        inputMode="decimal"
+                        value={String(item.protein)}
+                        onChange={(e) => atualizarMacroItemEmEdicao(indice, 'protein', e.target.value)}
+                      />
+                      <Field
+                        rotulo="Carb (g)"
+                        type="number"
+                        inputMode="decimal"
+                        value={String(item.carbs)}
+                        onChange={(e) => atualizarMacroItemEmEdicao(indice, 'carbs', e.target.value)}
+                      />
+                      <Field
+                        rotulo="Gord (g)"
+                        type="number"
+                        inputMode="decimal"
+                        value={String(item.fat)}
+                        onChange={(e) => atualizarMacroItemEmEdicao(indice, 'fat', e.target.value)}
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                <Button type="button" variante="fantasma" onClick={adicionarItemEmEdicao}>
+                  + Adicionar Item
+                </Button>
+                <Button type="button" variante="secundaria" larguraTotal onClick={concluirEdicaoItens}>
+                  Concluir Edição
+                </Button>
+              </div>
+            ) : (
+              <div className="flex gap-3">
+                {pendingMeal.imageUrl ? (
+                  <img
+                    src={pendingMeal.imageUrl}
+                    alt="Foto do prato escaneado"
+                    className="size-20 shrink-0 rounded-xl object-cover"
+                  />
+                ) : (
+                  <div
+                    className="flex size-20 shrink-0 items-center justify-center rounded-xl text-2xl"
+                    style={{ background: 'var(--surface-sunken)' }}
+                    title={pendingMeal.description ?? undefined}
+                  >
+                    ✍️
+                  </div>
+                )}
                 <ul className="flex flex-col justify-center gap-0.5">
                   {pendingMeal.items.map((item, indice) => (
                     <li key={indice} className="t-label text-ink">
@@ -474,8 +566,8 @@ export function TelaScanner() {
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-xl p-3" style={{ background: 'var(--surface-sunken)' }}>

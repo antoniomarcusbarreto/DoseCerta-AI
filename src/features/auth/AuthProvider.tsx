@@ -11,6 +11,7 @@ import {
 import {
   createUserWithEmailAndPassword,
   EmailAuthProvider,
+  getAdditionalUserInfo,
   getIdTokenResult,
   getRedirectResult,
   GoogleAuthProvider,
@@ -26,11 +27,12 @@ import {
   updateProfile,
   type AuthCredential,
   type User,
+  type UserCredential,
 } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { onSnapshot } from 'firebase/firestore';
 import { getAuthCliente, getFunctionsCliente, getGoogleProvider, firebaseConfigurado } from '@/lib/firebase';
-import { garantirPerfil } from '@/features/dados/repositorio';
+import { garantirPerfil, registrarAceiteTermos } from '@/features/dados/repositorio';
 import { refEstadoConta } from '@/lib/firestore';
 import * as biometriaService from '@/lib/biometriaService';
 import { detectarAndroid, detectarIOS, limparEstadoLocal, rodandoComoPWAInstalado, validarSessao } from './sessao';
@@ -68,10 +70,19 @@ const CODIGOS_POPUP_CANCELADO = new Set(['auth/popup-closed-by-user', 'auth/canc
  * derrubar um login que já aconteceu de verdade no Auth. `merge: true` em
  * `garantirPerfil` também é o que torna seguro chamar isto em todo login por
  * Google (não só no primeiro).
+ *
+ * `isNewUser` distingue criação de conta de um login qualquer: o aceite dos
+ * Termos (consentimento implícito ao continuar com o Google, ver disclaimer
+ * na tela de login) só é gravado na primeira vez — senão a data de aceite
+ * seria reescrita a cada novo login.
  */
-async function garantirPerfilPosLogin(usuario: User): Promise<void> {
+async function garantirPerfilPosLogin(credencial: UserCredential): Promise<void> {
+  const usuario = credencial.user;
   try {
     await garantirPerfil(usuario.uid, usuario.displayName || usuario.email || 'Usuário');
+    if (getAdditionalUserInfo(credencial)?.isNewUser) {
+      await registrarAceiteTermos(usuario.uid);
+    }
   } catch (falha) {
     console.warn('[DoseCerta] perfil será criado depois:', falha);
   }
@@ -244,7 +255,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(async (resultado) => {
         if (resultado) {
           consumirRedirectPendente();
-          await garantirPerfilPosLogin(resultado.user);
+          await garantirPerfilPosLogin(resultado);
           return;
         }
         /*
@@ -291,6 +302,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      */
     try {
       await garantirPerfil(credencial.user.uid, nome.trim() || email);
+      await registrarAceiteTermos(credencial.user.uid);
     } catch (falha) {
       console.warn('[DoseCerta] perfil será criado depois:', falha);
     }
@@ -339,7 +351,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       const credencial = await signInWithPopup(auth, provider);
-      await garantirPerfilPosLogin(credencial.user);
+      await garantirPerfilPosLogin(credencial);
     } catch (falha) {
       const codigo =
         typeof falha === 'object' && falha !== null && 'code' in falha
@@ -370,7 +382,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         senha,
       );
       await linkWithCredential(credencial.user, vinculoPendente.credencial);
-      await garantirPerfilPosLogin(credencial.user);
+      await garantirPerfilPosLogin(credencial);
       setVinculoPendente(null);
     },
     [vinculoPendente],

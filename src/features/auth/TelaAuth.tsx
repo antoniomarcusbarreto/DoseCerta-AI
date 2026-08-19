@@ -4,6 +4,7 @@ import { firebaseConfigurado } from '@/lib/firebase';
 import * as biometriaService from '@/lib/biometriaService';
 import { Carregando } from '@/components/Carregando';
 import { useAmbiente } from '@/lib/useAmbiente';
+import { FolhaTermos } from '@/features/legal/FolhaTermos';
 import { useAuth } from './AuthProvider';
 
 type Modo = 'entrar' | 'criar';
@@ -69,6 +70,7 @@ export function TelaAuth({ modo }: { modo: Modo }) {
   const [enviandoBiometria, setEnviandoBiometria] = useState(false);
   const [senhaVinculo, setSenhaVinculo] = useState('');
   const [aceitouTermos, setAceitouTermos] = useState(false);
+  const [folhaAberta, setFolhaAberta] = useState<'termos' | 'privacidade' | null>(null);
 
   const [mostrarRecuperacao, setMostrarRecuperacao] = useState(false);
   const [etapaRecuperacao, setEtapaRecuperacao] = useState<'email' | 'codigo' | 'sucesso'>('email');
@@ -556,13 +558,21 @@ export function TelaAuth({ modo }: { modo: Modo }) {
               />
               <span>
                 Li e concordo com os{' '}
-                <Link to="/termos" target="_blank" rel="noopener noreferrer" className="text-white underline">
+                <button
+                  type="button"
+                  onClick={() => setFolhaAberta('termos')}
+                  className="text-white underline"
+                >
                   Termos de Uso
-                </Link>{' '}
+                </button>{' '}
                 e a{' '}
-                <Link to="/privacidade" target="_blank" rel="noopener noreferrer" className="text-white underline">
+                <button
+                  type="button"
+                  onClick={() => setFolhaAberta('privacidade')}
+                  className="text-white underline"
+                >
                   Política de Privacidade
-                </Link>
+                </button>
                 , incluindo o processamento dos meus dados para fins de acompanhamento.
               </span>
             </label>
@@ -599,6 +609,18 @@ export function TelaAuth({ modo }: { modo: Modo }) {
             {enviandoGoogle ? 'Aguarde…' : 'Continuar com o Google'}
           </button>
 
+          <p className="text-[11px] leading-snug text-center text-slate-400">
+            Ao continuar com o Google, você concorda com nossos{' '}
+            <button
+              type="button"
+              onClick={() => setFolhaAberta('termos')}
+              className="underline text-slate-300 hover:text-white"
+            >
+              Termos de Uso
+            </button>
+            .
+          </p>
+
           {!criando &&
           (isPWA || isMobile) &&
           biometriaService.suportaBiometria() &&
@@ -624,6 +646,12 @@ export function TelaAuth({ modo }: { modo: Modo }) {
           </p>
         </form>
       </div>
+
+      <FolhaTermos
+        aberto={folhaAberta !== null}
+        conteudo={folhaAberta ?? 'termos'}
+        aoFechar={() => setFolhaAberta(null)}
+      />
     </div>
   );
 }

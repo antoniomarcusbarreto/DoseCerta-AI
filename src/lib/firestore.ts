@@ -334,6 +334,7 @@ export const conversorPerfil: FirestoreDataConverter<Perfil, DocumentData> = {
       nome: String(d.nome ?? ''),
       alturaCm: d.alturaCm ?? null,
       criadoEm: paraData(d.criadoEm) ?? new Date(),
+      termosAceitosAt: paraData(d.termosAceitosAt) ?? null,
     };
   },
 };
@@ -374,7 +375,16 @@ export const conversorRegistroRefeicao = converter<RegistroRefeicao>(
     imageUrl: d.imageUrl ?? null,
     storagePath: d.storagePath ?? null,
     description: d.description ?? null,
-    items: Array.isArray(d.items) ? d.items : [],
+    items: Array.isArray(d.items)
+      ? d.items.map((item: any) => ({
+          name: String(item?.name ?? ''),
+          quantity: String(item?.quantity ?? ''),
+          calories: Number(item?.calories ?? 0),
+          protein: Number(item?.protein ?? 0),
+          carbs: Number(item?.carbs ?? 0),
+          fat: Number(item?.fat ?? 0),
+        }))
+      : [],
     macros: {
       protein: Number(d.macros?.protein ?? 0),
       carbs: Number(d.macros?.carbs ?? 0),

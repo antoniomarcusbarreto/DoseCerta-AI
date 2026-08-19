@@ -55,7 +55,7 @@ export function DadosEvolucaoProvider({ children }: { children: ReactNode }) {
   const { uid } = useDados();
 
   const historicoPeso = useColecao(
-    uid ? consultaHistoricoPeso(uid, 30) : null,
+    uid ? consultaHistoricoPeso(uid, 60) : null,
     uid ? `${uid}/weight_history` : null,
   );
   const planos = useColecao(

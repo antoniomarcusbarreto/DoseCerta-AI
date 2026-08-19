@@ -25,6 +25,8 @@ export type Perfil = {
   nome: string;
   alturaCm: number | null;
   criadoEm: Date;
+  /** Carimbo de aceite dos Termos de Uso/Política de Privacidade (LGPD). Ausente em perfis criados antes deste campo existir. */
+  termosAceitosAt?: Date | null;
 };
 
 export type FormaMedicamento = 'caneta' | 'oral';
@@ -218,7 +220,14 @@ export type RegistroFoto = {
   recordedAt: Date;
 };
 
-export type ItemRefeicaoIA = { name: string; quantity: string };
+export type ItemRefeicaoIA = {
+  name: string;
+  quantity: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+};
 
 export type MacrosRefeicao = { protein: number; carbs: number; fat: number; kcal: number };
 

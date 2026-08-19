@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { ConteudoTermos } from './conteudoLegal';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -37,27 +38,8 @@ export function TelaTermos() {
         <h1 className="mt-6 text-2xl md:text-3xl font-extrabold text-white">Termos de Uso</h1>
         <p className="t-label mt-1 text-slate-400">Última atualização: [data]</p>
 
-        <div className="space-y-6 text-gray-300 leading-relaxed">
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">1. Aceitação e Natureza do Serviço</h2>
-            <p>Ao utilizar o Dose Certa-AI, você concorda com estes Termos de Uso. O aplicativo é uma ferramenta de tecnologia desenvolvida para auxiliar na organização pessoal, registro de hábitos e acompanhamento de rotinas.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">2. Aviso Médico Importante (Isenção de Responsabilidade)</h2>
-            <p className="font-medium text-red-400">O Dose Certa-AI e seu Co-piloto de Inteligência Artificial NÃO são serviços médicos.</p>
-            <p className="mt-2">As informações, dicas de bem-estar e análises de refeições fornecidas não substituem, em hipótese alguma, diagnósticos, prescrições, consultas ou orientações de médicos, nutricionistas e profissionais de saúde qualificados. Nunca altere seu tratamento ou medicação com base nas interações com o aplicativo. Em caso de sintomas graves, procure atendimento médico imediatamente.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">3. Responsabilidade do Usuário</h2>
-            <p>Você é inteiramente responsável pela veracidade dos dados inseridos (como peso, sintomas e fotos) e por manter a confidencialidade de suas credenciais de acesso.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">4. Propriedade Intelectual</h2>
-            <p>Todo o design, código e tecnologia empregados no aplicativo são de propriedade exclusiva de seus criadores, sendo proibida a reprodução ou engenharia reversa sem autorização.</p>
-          </section>
+        <div className="mt-6">
+          <ConteudoTermos />
         </div>
 
         <div className="mt-8">

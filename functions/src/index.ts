@@ -262,7 +262,14 @@ export const gerarPlanoAlimentarIA = onCall(
   },
 );
 
-type ItemRefeicaoExtraido = { name: string; quantity: string };
+type ItemRefeicaoExtraido = {
+  name: string;
+  quantity: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+};
 type MacrosExtraidos = { protein: number; carbs: number; fat: number; kcal: number };
 type AnaliseRefeicaoExtraida = {
   items: ItemRefeicaoExtraido[];
@@ -280,8 +287,12 @@ const esquemaAnaliseRefeicao = {
         properties: {
           name: { type: Type.STRING, description: 'Nome do alimento identificado no prato' },
           quantity: { type: Type.STRING, description: 'Quantidade estimada, ex: "150g"' },
+          calories: { type: Type.NUMBER, description: 'Calorias estimadas deste item' },
+          protein: { type: Type.NUMBER, description: 'Proteína deste item em gramas' },
+          carbs: { type: Type.NUMBER, description: 'Carboidrato deste item em gramas' },
+          fat: { type: Type.NUMBER, description: 'Gordura deste item em gramas' },
         },
-        required: ['name', 'quantity'],
+        required: ['name', 'quantity', 'calories', 'protein', 'carbs', 'fat'],
       },
     },
     macros: {
@@ -369,7 +380,8 @@ export const analisarRefeicaoIA = onCall(
 
     const prompt =
       'Analise a foto deste prato de comida. Identifique os alimentos e suas quantidades estimadas, ' +
-      'calcule os macronutrientes totais (proteína, carboidrato, gordura em gramas, e calorias), e escreva ' +
+      'calcule os macronutrientes (proteína, carboidrato, gordura em gramas, e calorias) de CADA item ' +
+      'individualmente, some-os para obter os macronutrientes totais da refeição, e escreva ' +
       'um feedback curto (1-2 frases, em português, pode usar emoji) cruzando o que foi identificado com o ' +
       `plano alimentar do usuário abaixo.\n\n${promptContexto}`;
 
@@ -458,9 +470,10 @@ export const analisarDescricaoRefeicaoIA = onCall(
 
     const prompt =
       'O usuário descreveu em texto o que comeu. Identifique os alimentos e quantidades mencionados ' +
-      '(estime a quantidade quando não for explícita), calcule os macronutrientes totais (proteína, ' +
-      'carboidrato, gordura em gramas, e calorias), e escreva um feedback curto (1-2 frases, em português, ' +
-      'pode usar emoji) cruzando o que foi descrito com o plano alimentar do usuário abaixo.\n\n' +
+      '(estime a quantidade quando não for explícita), calcule os macronutrientes (proteína, carboidrato, ' +
+      'gordura em gramas, e calorias) de CADA item individualmente, some-os para obter os macronutrientes ' +
+      'totais da refeição, e escreva um feedback curto (1-2 frases, em português, pode usar emoji) cruzando ' +
+      'o que foi descrito com o plano alimentar do usuário abaixo.\n\n' +
       `${promptContexto}\n\nDescrição da refeição: "${descricao.trim()}"`;
 
     const inicio = Date.now();

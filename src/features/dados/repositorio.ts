@@ -7,6 +7,7 @@ import {
   limit,
   orderBy,
   query,
+  serverTimestamp,
   setDoc,
   updateDoc,
   where,
@@ -82,6 +83,22 @@ export async function garantirPerfil(uid: string, nome: string): Promise<void> {
 
 export async function atualizarPerfil(uid: string, campos: Partial<Perfil>): Promise<void> {
   await setDoc(refPerfil(uid), campos as Perfil, { merge: true });
+}
+
+/**
+ * Registro de auditoria LGPD do aceite dos Termos de Uso/Política de
+ * Privacidade. Escreve direto no doc bruto (sem o conversor de `Perfil`) para
+ * não passar pelo mapeamento de `garantirPerfil`, que roda em todo login e
+ * reescreveria este carimbo se ele fizesse parte do objeto `Perfil` completo.
+ * `serverTimestamp()` é seguro aqui porque este campo nunca é usado em
+ * `orderBy`/`where` — é só registro de auditoria, não estado de tela.
+ */
+export async function registrarAceiteTermos(uid: string): Promise<void> {
+  await setDoc(
+    doc(getDb(), 'users', uid, 'meta', 'perfil'),
+    { termosAceitosAt: serverTimestamp() },
+    { merge: true },
+  );
 }
 
 /**
@@ -541,13 +558,19 @@ export async function marcarErroAnaliseRefeicao(
   await updateDoc(doc(colRefeicoes(uid), mealId), { status: 'error', analysisError });
 }
 
-/** Atualiza os itens de uma refeição ainda pendente (usado pela edição manual antes de confirmar). */
+/**
+ * Atualiza os itens de uma refeição ainda pendente (usado pela edição manual
+ * antes de confirmar), junto com os macros totais — recalculados como a soma
+ * dos itens, para que excluir/adicionar/corrigir um item realmente mude o
+ * total salvo, em vez de deixar o card de macros incoerente com a lista.
+ */
 export async function atualizarItensRefeicaoPendente(
   uid: string,
   mealId: string,
   items: RegistroRefeicao['items'],
+  macros: MacrosRefeicao,
 ): Promise<void> {
-  await updateDoc(doc(colRefeicoes(uid), mealId), { items });
+  await updateDoc(doc(colRefeicoes(uid), mealId), { items, macros });
 }
 
 /**

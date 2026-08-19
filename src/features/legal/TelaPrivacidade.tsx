@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { ConteudoPrivacidade } from './conteudoLegal';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -37,31 +38,8 @@ export function TelaPrivacidade() {
         <h1 className="mt-6 text-2xl md:text-3xl font-extrabold text-white">Política de Privacidade</h1>
         <p className="t-label mt-1 text-slate-400">Última atualização: [data]</p>
 
-        <div className="space-y-6 text-gray-300 leading-relaxed">
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">1. Coleta de Dados Pessoais e Sensíveis</h2>
-            <p>Para fornecer nossos serviços, coletamos informações de cadastro (nome, e-mail) e dados classificados pela LGPD (Lei Geral de Proteção de Dados) como sensíveis relativos à sua rotina de bem-estar: histórico de peso, registro de sintomas, fotos de refeições e horários de aplicações.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">2. Uso e Finalidade</h2>
-            <p>Seus dados são utilizados exclusivamente para o funcionamento do aplicativo, personalização do Co-piloto de Inteligência Artificial, envio de lembretes e geração de gráficos de evolução do seu próprio uso.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">3. Armazenamento e Processamento Externo</h2>
-            <p>O Dose Certa-AI utiliza infraestrutura de nuvem segura. Os textos inseridos no chat e os registros de sintomas são processados por serviços de Inteligência Artificial de terceiros estritamente para a formulação das respostas do assistente, sem que sejam utilizados para treinar modelos públicos que exponham sua identidade.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">4. Seus Direitos (LGPD)</h2>
-            <p>Você tem total controle sobre suas informações. A qualquer momento, através do menu de Ajustes, você pode solicitar a exportação de seus registros ou a exclusão permanente e irreversível de sua conta, o que apagará todos os seus dados, fotos e histórico de nossos servidores.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-white mb-2">5. Contato e Dúvidas</h2>
-            <p>Para exercer seus direitos previstos na LGPD ou para tirar qualquer dúvida sobre como seus dados são tratados, entre em contato conosco através do e-mail: <strong className="text-white">suporte@dosecerta.com</strong>.</p>
-          </section>
+        <div className="mt-6">
+          <ConteudoPrivacidade />
         </div>
 
         <div className="mt-8">
