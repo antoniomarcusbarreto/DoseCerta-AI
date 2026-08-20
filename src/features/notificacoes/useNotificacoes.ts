@@ -125,6 +125,32 @@ export function useNotificacoes() {
     };
   }, [usuario, precisaInstalar, obterEPersistirToken]);
 
+  /*
+   * O mesmo recheck acima, mas disparado ao voltar ao primeiro plano — não só
+   * no mount. Tokens FCM morrem silenciosamente (troca de dispositivo, app
+   * reinstalado, o próprio SO revogando o registro) sem nenhum evento que
+   * avise o app, e em PWA trocar de app no celular não recarrega a página.
+   * Sem isto, um token morto só seria detectado se a pessoa fechasse e
+   * reabrisse o app do zero — na prática, nunca. Foi assim que dois usuários
+   * pararam de receber lembretes: o token expirou entre uma abertura e
+   * outra, e nada revalidava até o próximo mount.
+   */
+  useEffect(() => {
+    if (!usuario || precisaInstalar) return;
+    if (typeof Notification === 'undefined') return;
+
+    const aoVoltar = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Notification.permission !== 'granted') return;
+      obterEPersistirToken().catch((falha: unknown) => {
+        console.error('[DoseCerta] recheck de notificações ao voltar ao app falhou:', falha);
+      });
+    };
+
+    document.addEventListener('visibilitychange', aoVoltar);
+    return () => document.removeEventListener('visibilitychange', aoVoltar);
+  }, [usuario, precisaInstalar, obterEPersistirToken]);
+
   const sincronizarDispositivo = useCallback(async () => {
     if (!usuario || precisaInstalar) return;
     if (typeof Notification === 'undefined') {
