@@ -61,6 +61,16 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* Esconde a barra de rolagem em containers com scroll horizontal por swipe
+   (tabs, carrosséis) sem desabilitar o gesto — só a UI da barra some. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /*
  * Escala tipográfica. A hierarquia vem do TAMANHO, não do peso nem da cor —
  * é o que faz a referência funcionar. O número gigante é leve (300), não bold.

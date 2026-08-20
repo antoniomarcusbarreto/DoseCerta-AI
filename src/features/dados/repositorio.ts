@@ -719,6 +719,17 @@ export const consultaSintomasUltimos7Dias = (uid: string) => {
   );
 };
 
+/** Registros de hidratação desde uma data de início (hora local), do mais
+ * recente ao mais antigo. Usada pelo card de evolução da Home (períodos
+ * 7/15/30 dias) — `consultaHidratacaoHoje` continua servindo a TelaHidratacao. */
+export const consultaHidratacaoDesde = (uid: string, dataInicio: Date) =>
+  query(colHidratacao(uid), where('recordedAt', '>=', dataInicio), orderBy('recordedAt', 'desc'));
+
+/** Sintomas registrados desde uma data de início (hora local), do mais
+ * recente ao mais antigo. Mesma razão de existir de `consultaHidratacaoDesde`. */
+export const consultaSintomasDesde = (uid: string, dataInicio: Date) =>
+  query(colSintomas(uid), where('recordedAt', '>=', dataInicio), orderBy('recordedAt', 'desc'));
+
 /**
  * Últimos registros de evacuação, do mais recente ao mais antigo, sem corte por
  * data — o alerta de constipação precisa enxergar o último registro mesmo que

@@ -12,14 +12,28 @@ import type {
 } from '@/domain/tipos';
 import {
   consultaFotosProgresso,
+  consultaHidratacaoDesde,
   consultaHidratacaoHoje,
   consultaHistoricoPeso,
   consultaIntestinoRecentes,
   consultaPlanosAlimentares,
   consultaRefeicoesDeHojeConcluidas,
+  consultaSintomasDesde,
   consultaSintomasUltimos7Dias,
   consultaTodasRefeicoesConcluidas,
 } from './repositorio';
+
+/** Início da janela de 30 dias usada pelo card de evolução da Home — cobre os
+ * 3 períodos de seleção (7/15/30 dias) via filtro client-side, mesmo padrão já
+ * usado para `historicoPeso`. Calculado uma vez por montagem do provider; o
+ * mesmo risco pré-existente de virar o dia com o app aberto já existe em
+ * `consultaHidratacaoHoje`/`consultaSintomasUltimos7Dias`, não é regressão. */
+function inicioDaJanelaDe30Dias(): Date {
+  const data = new Date();
+  data.setHours(0, 0, 0, 0);
+  data.setDate(data.getDate() - 29);
+  return data;
+}
 
 export type DadosEvolucao = {
   historicoPeso: RegistroPeso[];
@@ -38,6 +52,10 @@ export type DadosEvolucao = {
   fotosCarregando: boolean;
   refeicoesTodas: RegistroRefeicao[];
   refeicoesTodasCarregando: boolean;
+  hidratacao30d: RegistroHidratacao[];
+  hidratacao30dCarregando: boolean;
+  sintomas30d: RegistroSintoma[];
+  sintomas30dCarregando: boolean;
   erro: Error | null;
 };
 
@@ -86,6 +104,14 @@ export function DadosEvolucaoProvider({ children }: { children: ReactNode }) {
     uid ? consultaTodasRefeicoesConcluidas(uid, 200) : null,
     uid ? `${uid}/meals/todas` : null,
   );
+  const hidratacao30d = useColecao(
+    uid ? consultaHidratacaoDesde(uid, inicioDaJanelaDe30Dias()) : null,
+    uid ? `${uid}/hydration_logs/30d` : null,
+  );
+  const sintomas30d = useColecao(
+    uid ? consultaSintomasDesde(uid, inicioDaJanelaDe30Dias()) : null,
+    uid ? `${uid}/sintomas/30d` : null,
+  );
 
   const valor = useMemo<DadosEvolucao>(
     () => ({
@@ -105,6 +131,10 @@ export function DadosEvolucaoProvider({ children }: { children: ReactNode }) {
       fotosCarregando: fotos.carregando,
       refeicoesTodas: refeicoesTodas.dados,
       refeicoesTodasCarregando: refeicoesTodas.carregando,
+      hidratacao30d: hidratacao30d.dados,
+      hidratacao30dCarregando: hidratacao30d.carregando,
+      sintomas30d: sintomas30d.dados,
+      sintomas30dCarregando: sintomas30d.carregando,
       erro:
         historicoPeso.erro ??
         planos.erro ??
@@ -113,9 +143,22 @@ export function DadosEvolucaoProvider({ children }: { children: ReactNode }) {
         sintomas.erro ??
         intestino.erro ??
         fotos.erro ??
-        refeicoesTodas.erro,
+        refeicoesTodas.erro ??
+        hidratacao30d.erro ??
+        sintomas30d.erro,
     }),
-    [historicoPeso, planos, refeicoesHoje, hidratacaoHoje, sintomas, intestino, fotos, refeicoesTodas],
+    [
+      historicoPeso,
+      planos,
+      refeicoesHoje,
+      hidratacaoHoje,
+      sintomas,
+      intestino,
+      fotos,
+      refeicoesTodas,
+      hidratacao30d,
+      sintomas30d,
+    ],
   );
 
   return <Contexto.Provider value={valor}>{children}</Contexto.Provider>;

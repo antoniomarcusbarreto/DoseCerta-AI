@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArcGauge } from '@/components/ArcGauge';
 import { Button } from '@/components/Button';
-import { GraficoEvolucaoPeso } from '@/components/GraficoEvolucaoPeso';
+import { GraficoEvolucaoCard } from '@/components/GraficoEvolucao';
 import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
@@ -100,7 +100,7 @@ export function Home() {
       </SheetCard>
 
       <SheetCard titulo="Curva de Evolução">
-        <GraficoEvolucaoPeso />
+        <GraficoEvolucaoCard />
       </SheetCard>
     </Pagina>
   );
