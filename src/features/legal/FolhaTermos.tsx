@@ -43,7 +43,7 @@ export function FolhaTermos({ aberto, conteudo, aoFechar }: Props) {
             type="button"
             onClick={aoFechar}
             aria-label="Fechar"
-            className="inline-flex size-9 items-center justify-center rounded-full border border-white/20 bg-white/5 text-white backdrop-blur-md hover:opacity-85 transition-opacity"
+            className="inline-flex size-11 items-center justify-center rounded-full border border-white/20 bg-white/5 text-white backdrop-blur-md hover:opacity-85 transition-opacity"
           >
             <svg viewBox="0 0 24 24" className="size-4" aria-hidden="true">
               <path

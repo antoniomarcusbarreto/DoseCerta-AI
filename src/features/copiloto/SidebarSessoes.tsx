@@ -69,7 +69,7 @@ export function SidebarSessoes({ sessoes, sessaoAtivaId, onNovaConversa, onSelec
                   <button
                     type="button"
                     onClick={() => onSelecionar(sessao.id)}
-                    className={`block w-full truncate rounded-[var(--r-field)] py-2.5 pl-3 pr-9 text-left t-label transition-colors ${
+                    className={`block w-full truncate rounded-[var(--r-field)] py-2.5 pl-3 pr-11 text-left t-label transition-colors ${
                       ativa ? 'bg-sunken text-ink' : 'text-ink-muted hover:bg-sunken'
                     }`}
                   >
@@ -79,7 +79,7 @@ export function SidebarSessoes({ sessoes, sessaoAtivaId, onNovaConversa, onSelec
                     type="button"
                     onClick={() => pedirExclusao(sessao)}
                     aria-label={`Apagar conversa "${sessao.titulo || 'Nova conversa'}"`}
-                    className="absolute right-1.5 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-full text-ink-faint transition-colors hover:bg-card hover:text-danger"
+                    className="absolute right-0.5 top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-full text-ink-faint transition-colors hover:bg-card hover:text-danger"
                   >
                     <IconeLixeira />
                   </button>
