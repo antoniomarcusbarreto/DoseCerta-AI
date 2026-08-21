@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import {
   Bar,
   CartesianGrid,
@@ -118,7 +119,7 @@ function TooltipHidratacao({ active, payload, label, labelFormatter }: TooltipCo
   );
 }
 
-export function GraficoHidratacao({
+function GraficoHidratacaoBase({
   hidratacao,
   sintomas,
   periodo,
@@ -127,9 +128,10 @@ export function GraficoHidratacao({
   sintomas: RegistroSintoma[];
   periodo: PeriodoDias;
 }) {
-  const pontosInternos = montarPontos(hidratacao, sintomas);
-  const pontosFiltrados = filtrarPorPeriodo(pontosInternos, periodo);
-  const dadosGrafico = formatarPontos(pontosFiltrados);
+  const dadosGrafico = useMemo(() => {
+    const pontosInternos = montarPontos(hidratacao, sintomas);
+    return formatarPontos(filtrarPorPeriodo(pontosInternos, periodo));
+  }, [hidratacao, sintomas, periodo]);
 
   if (dadosGrafico.length === 0) {
     return (
@@ -184,3 +186,5 @@ export function GraficoHidratacao({
     </div>
   );
 }
+
+export const GraficoHidratacao = memo(GraficoHidratacaoBase);

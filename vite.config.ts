@@ -43,4 +43,27 @@ export default defineConfig({
   server: {
     port: 5173,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        /*
+         * Firebase e Recharts são as duas dependências mais pesadas do
+         * bundle e só entram em uso depois do primeiro carregamento (auth já
+         * consome Firebase, mas os gráficos só aparecem na Evolução) — vão
+         * em chunks próprios para não inflar o JS inicial em 3G/4G.
+         */
+        manualChunks: {
+          firebase: [
+            'firebase/app',
+            'firebase/auth',
+            'firebase/firestore',
+            'firebase/functions',
+            'firebase/storage',
+            'firebase/messaging',
+          ],
+          recharts: ['recharts'],
+        },
+      },
+    },
+  },
 });

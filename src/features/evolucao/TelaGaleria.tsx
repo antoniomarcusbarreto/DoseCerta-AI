@@ -252,6 +252,7 @@ export function TelaGaleria() {
                 <img
                   src={foto.imageUrl}
                   alt={`Foto de progresso — ${foto.angle}`}
+                  loading="lazy"
                   className="aspect-square w-full rounded-xl object-cover"
                 />
                 <p className="t-caption text-center text-ink-muted">
@@ -308,7 +309,7 @@ export function TelaGaleria() {
         ) : fotos.length === 0 ? (
           <p className="t-label text-ink-muted">Nenhuma foto ainda.</p>
         ) : (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {fotos.map((foto) => {
               const indiceSelecao = selectedPhotos.indexOf(foto.id);
               const selecionada = indiceSelecao !== -1;
@@ -339,6 +340,7 @@ export function TelaGaleria() {
                     <img
                       src={foto.imageUrl}
                       alt={`Foto de progresso — ${foto.angle}`}
+                      loading="lazy"
                       className="aspect-square w-full rounded-xl object-cover"
                     />
                     {selecionada ? (

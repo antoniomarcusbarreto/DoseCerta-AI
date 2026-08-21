@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import {
   CartesianGrid,
   Line,
@@ -191,7 +192,7 @@ type GraficoLinhaMetricaProps = {
   mensagemVazio: string;
 };
 
-export function GraficoLinhaMetrica({
+function GraficoLinhaMetricaBase({
   historico,
   aplicacoes,
   periodo,
@@ -202,9 +203,10 @@ export function GraficoLinhaMetrica({
   unidade,
   mensagemVazio,
 }: GraficoLinhaMetricaProps) {
-  const pontosInternos = montarPontosInternos(historico, aplicacoes, extrair, comHeranca);
-  const pontosFiltrados = filtrarPorPeriodo(pontosInternos, periodo);
-  const dadosGrafico = formatarPontos(pontosFiltrados);
+  const dadosGrafico = useMemo(() => {
+    const pontosInternos = montarPontosInternos(historico, aplicacoes, extrair, comHeranca);
+    return formatarPontos(filtrarPorPeriodo(pontosInternos, periodo));
+  }, [historico, aplicacoes, extrair, comHeranca, periodo]);
   const temAlgumValor = dadosGrafico.some((p) => p.valor !== null);
 
   if (!temAlgumValor) {
@@ -274,3 +276,5 @@ export function GraficoLinhaMetrica({
     </div>
   );
 }
+
+export const GraficoLinhaMetrica = memo(GraficoLinhaMetricaBase);

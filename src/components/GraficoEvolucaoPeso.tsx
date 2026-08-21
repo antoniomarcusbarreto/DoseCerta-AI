@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -159,15 +159,22 @@ type GraficoEvolucaoPesoProps = {
   dados?: PontoEvolucaoPeso[];
 };
 
-export function GraficoEvolucaoPeso({ dados }: GraficoEvolucaoPesoProps) {
+function GraficoEvolucaoPesoBase({ dados }: GraficoEvolucaoPesoProps) {
   const { aplicacoes } = useDados();
   const { historicoPeso: historico, historicoPesoCarregando: carregando } = useEvolucao();
   const [periodo, setPeriodo] = useState<PeriodoDias>(7);
 
   const usaSeletor = dados === undefined;
-  const pontosInternos = usaSeletor ? montarPontosInternos(historico, aplicacoes) : [];
-  const pontosFiltrados = usaSeletor ? filtrarPorPeriodo(pontosInternos, periodo) : [];
-  const dadosGrafico = dados ?? formatarPontos(pontosFiltrados);
+
+  const pontosInternos = useMemo(
+    () => (usaSeletor ? montarPontosInternos(historico, aplicacoes) : []),
+    [usaSeletor, historico, aplicacoes],
+  );
+
+  const dadosGrafico = useMemo(() => {
+    if (dados) return dados;
+    return formatarPontos(filtrarPorPeriodo(pontosInternos, periodo));
+  }, [dados, pontosInternos, periodo]);
 
   if (usaSeletor && carregando && historico.length === 0) {
     return (
@@ -249,3 +256,5 @@ export function GraficoEvolucaoPeso({ dados }: GraficoEvolucaoPesoProps) {
     </div>
   );
 }
+
+export const GraficoEvolucaoPeso = memo(GraficoEvolucaoPesoBase);

@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import {
   Bar,
   CartesianGrid,
@@ -76,16 +77,17 @@ function TooltipNutricao({ active, payload, label, labelFormatter }: TooltipCont
   );
 }
 
-export function GraficoNutricao({
+function GraficoNutricaoBase({
   refeicoes,
   periodo,
 }: {
   refeicoes: RegistroRefeicao[];
   periodo: PeriodoDias;
 }) {
-  const pontosInternos = agregarPorDia(refeicoes);
-  const pontosFiltrados = filtrarPorPeriodo(pontosInternos, periodo);
-  const dadosGrafico = formatarPontos(pontosFiltrados);
+  const dadosGrafico = useMemo(() => {
+    const pontosInternos = agregarPorDia(refeicoes);
+    return formatarPontos(filtrarPorPeriodo(pontosInternos, periodo));
+  }, [refeicoes, periodo]);
 
   if (dadosGrafico.length === 0) {
     return (
@@ -158,3 +160,5 @@ export function GraficoNutricao({
     </div>
   );
 }
+
+export const GraficoNutricao = memo(GraficoNutricaoBase);
