@@ -19,5 +19,8 @@ Thumbs.db
 !.vscode/extensions.json
 .idea/
 
+.claude/
+.impeccable/
+
 coverage/
 *.tsbuildinfo
