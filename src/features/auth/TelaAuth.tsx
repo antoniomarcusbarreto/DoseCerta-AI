@@ -186,7 +186,7 @@ export function TelaAuth({ modo }: { modo: Modo }) {
       <div
         className="flex min-h-dvh flex-col justify-center px-0 md:px-6 pb-10"
         style={{
-          background: 'linear-gradient(180deg, #3b4c5e 0%, #6c8496 100%)',
+          background: 'var(--grad-hero)',
           paddingTop: 'calc(env(safe-area-inset-top, 0px) + 48px)',
         }}
       >
@@ -216,9 +216,15 @@ export function TelaAuth({ modo }: { modo: Modo }) {
                 onChange={(e) => setSenhaVinculo(e.target.value)}
                 autoComplete="current-password"
                 placeholder="••••••••"
+                aria-invalid={erro ? true : undefined}
+                aria-describedby={erro ? 'senha-vinculo-erro' : undefined}
                 className={`mt-1.5 block min-h-11 w-full rounded-[14px] border ${erro ? 'border-red-500' : 'border-white/20'} bg-white/5 px-4 t-body text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500`}
               />
-              {erro ? <p className="t-label mt-1.5 text-red-500">{erro}</p> : null}
+              {erro ? (
+                <p id="senha-vinculo-erro" role="alert" className="t-label mt-1.5 text-red-500">
+                  {erro}
+                </p>
+              ) : null}
             </div>
 
             <div className="pt-2">
@@ -253,7 +259,7 @@ export function TelaAuth({ modo }: { modo: Modo }) {
       <div
         className="flex min-h-dvh flex-col justify-center px-0 md:px-6 pb-10"
         style={{
-          background: 'linear-gradient(180deg, #3b4c5e 0%, #6c8496 100%)',
+          background: 'var(--grad-hero)',
           paddingTop: 'calc(env(safe-area-inset-top, 0px) + 48px)',
         }}
       >
@@ -311,9 +317,15 @@ export function TelaAuth({ modo }: { modo: Modo }) {
                   onChange={(e) => setEmailRecuperacao(e.target.value)}
                   autoComplete="email"
                   placeholder="voce@exemplo.com"
+                  aria-invalid={erroRecuperacao ? true : undefined}
+                  aria-describedby={erroRecuperacao ? 'email-recuperacao-erro' : undefined}
                   className={`mt-1.5 block min-h-11 w-full rounded-[14px] border ${erroRecuperacao ? 'border-red-500' : 'border-white/20'} bg-white/5 px-4 t-body text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500`}
                 />
-                {erroRecuperacao ? <p className="t-label mt-1.5 text-red-500">{erroRecuperacao}</p> : null}
+                {erroRecuperacao ? (
+                  <p id="email-recuperacao-erro" role="alert" className="t-label mt-1.5 text-red-500">
+                    {erroRecuperacao}
+                  </p>
+                ) : null}
               </div>
 
               <div className="pt-2">
@@ -352,6 +364,8 @@ export function TelaAuth({ modo }: { modo: Modo }) {
                   value={codigoRecuperacao}
                   onChange={(e) => setCodigoRecuperacao(e.target.value.replace(/\D/g, ''))}
                   placeholder="000000"
+                  aria-invalid={erroRecuperacao ? true : undefined}
+                  aria-describedby={erroRecuperacao ? 'redefinicao-erro' : undefined}
                   className="mt-1.5 block min-h-11 w-full rounded-[14px] border border-white/20 bg-white/5 px-4 t-body tracking-[0.3em] text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500"
                 />
               </div>
@@ -369,6 +383,8 @@ export function TelaAuth({ modo }: { modo: Modo }) {
                   value={novaSenhaRecuperacao}
                   onChange={(e) => setNovaSenhaRecuperacao(e.target.value)}
                   placeholder="Mínimo de 6 caracteres"
+                  aria-invalid={erroRecuperacao ? true : undefined}
+                  aria-describedby={erroRecuperacao ? 'redefinicao-erro' : undefined}
                   className="mt-1.5 block min-h-11 w-full rounded-[14px] border border-white/20 bg-white/5 px-4 t-body text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500"
                 />
               </div>
@@ -386,9 +402,15 @@ export function TelaAuth({ modo }: { modo: Modo }) {
                   value={confirmarSenhaRecuperacao}
                   onChange={(e) => setConfirmarSenhaRecuperacao(e.target.value)}
                   placeholder="••••••••"
+                  aria-invalid={erroRecuperacao ? true : undefined}
+                  aria-describedby={erroRecuperacao ? 'redefinicao-erro' : undefined}
                   className={`mt-1.5 block min-h-11 w-full rounded-[14px] border ${erroRecuperacao ? 'border-red-500' : 'border-white/20'} bg-white/5 px-4 t-body text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500`}
                 />
-                {erroRecuperacao ? <p className="t-label mt-1.5 text-red-500">{erroRecuperacao}</p> : null}
+                {erroRecuperacao ? (
+                  <p id="redefinicao-erro" role="alert" className="t-label mt-1.5 text-red-500">
+                    {erroRecuperacao}
+                  </p>
+                ) : null}
               </div>
 
               <div className="pt-2">
@@ -509,6 +531,8 @@ export function TelaAuth({ modo }: { modo: Modo }) {
                 onChange={(e) => setSenha(e.target.value)}
                 autoComplete={criando ? 'new-password' : 'current-password'}
                 placeholder={criando ? 'Mínimo de 6 caracteres' : '••••••••'}
+                aria-invalid={erro ? true : undefined}
+                aria-describedby={erro ? 'senha-erro' : undefined}
                 className={`block min-h-11 w-full rounded-[14px] border ${erro ? 'border-red-500' : 'border-white/20'} bg-white/5 px-4 pr-12 t-body text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-teal-500`}
               />
               <button
@@ -530,7 +554,7 @@ export function TelaAuth({ modo }: { modo: Modo }) {
               </button>
             </div>
             {erro ? (
-              <p className="t-label mt-1.5 text-red-500">
+              <p id="senha-erro" role="alert" className="t-label mt-1.5 text-red-500">
                 {erro}
               </p>
             ) : null}

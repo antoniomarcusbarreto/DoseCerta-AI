@@ -315,6 +315,9 @@ export function TelaGaleria() {
               return (
                 <div
                   key={foto.id}
+                  role={compareMode ? 'button' : undefined}
+                  tabIndex={compareMode ? 0 : undefined}
+                  aria-pressed={compareMode ? selecionada : undefined}
                   className={`flex flex-col gap-2 rounded-xl p-1.5 transition-shadow ${
                     compareMode ? 'cursor-pointer' : ''
                   }`}
@@ -324,6 +327,13 @@ export function TelaGaleria() {
                       : undefined
                   }
                   onClick={() => aoClicarNoGrid(foto.id)}
+                  onKeyDown={(evento) => {
+                    if (!compareMode) return;
+                    if (evento.key === 'Enter' || evento.key === ' ') {
+                      evento.preventDefault();
+                      aoClicarNoGrid(foto.id);
+                    }
+                  }}
                 >
                   <div className="relative">
                     <img

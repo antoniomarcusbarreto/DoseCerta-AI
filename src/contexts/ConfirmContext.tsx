@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { Button } from '@/components/Button';
+import { useDialogoModal } from '@/lib/useDialogoModal';
 
 type ConfirmOptions = {
   title: string;
@@ -37,6 +38,8 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     fechar();
   }
 
+  const dialogoRef = useDialogoModal<HTMLDivElement>(cancelar, pedido !== null);
+
   return (
     <ConfirmContext.Provider value={{ askConfirm }}>
       {children}
@@ -50,7 +53,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         >
           <div aria-hidden="true" onClick={cancelar} className="absolute inset-0" />
 
-          <div className="relative w-full max-w-sm rounded-2xl bg-card p-5">
+          <div ref={dialogoRef} className="relative w-full max-w-sm rounded-2xl bg-card p-5">
             <h2 className="t-title text-ink">{pedido.title}</h2>
             <p className="t-label mt-2 text-ink-muted">{pedido.message}</p>
 

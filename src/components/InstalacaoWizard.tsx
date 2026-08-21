@@ -4,6 +4,7 @@ import { Button } from '@/components/Button';
 import { detectarIOS } from '@/features/auth/sessao';
 import { aoCapturarPrompt, limparPromptInstalacao, obterPromptInstalacao } from '@/lib/promptInstalacao';
 import { useAmbiente } from '@/lib/useAmbiente';
+import { useDialogoModal } from '@/lib/useDialogoModal';
 
 const CHAVE_DISPENSADO = 'instalacao-wizard-dispensado';
 
@@ -46,7 +47,10 @@ export function InstalacaoWizard() {
     fechar();
   }
 
-  if (dispensado || !plataforma) return null;
+  const visivel = !dispensado && !!plataforma;
+  const dialogoRef = useDialogoModal<HTMLDivElement>(fechar, visivel);
+
+  if (!visivel) return null;
 
   return (
     <div
@@ -57,7 +61,7 @@ export function InstalacaoWizard() {
     >
       <div aria-hidden="true" onClick={fechar} className="absolute inset-0" />
 
-      <div className="folha relative w-full max-w-sm bg-card p-5">
+      <div ref={dialogoRef} className="folha relative w-full max-w-sm bg-card p-5">
         <button
           type="button"
           onClick={fechar}

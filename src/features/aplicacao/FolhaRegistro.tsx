@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Alerta } from '@/components/Alerta';
 import { Button } from '@/components/Button';
 import { Field } from '@/components/Field';
 import { descreverLocal, PONTOS_RODIZIO, proximoLocal } from '@/domain/aplicacao';
 import { registrarAplicacao } from '@/features/dados/repositorio';
+import { useDialogoModal } from '@/lib/useDialogoModal';
 import type { Aplicacao, LocalAplicacao, Protocolo } from '@/domain/tipos';
 
 type Props = {
@@ -36,34 +37,7 @@ export function FolhaRegistro({ uid, protocolo, aplicacoes, canetaId, onFechar }
 
   const doseNumero = Number(dose.replace(',', '.'));
 
-  const formulario = useRef<HTMLFormElement>(null);
-
-  /*
-   * Comportamento de diálogo que faltava e que só o desktop cobra: no celular
-   * a folha se fecha pelo botão Cancelar e ninguém sente falta; no PC, sem
-   * Escape e com a página rolando atrás, ela parece travada.
-   *
-   * O foco também precisa voltar para quem abriu a folha, senão o Tab
-   * recomeça do topo do documento depois de fechar.
-   */
-  useEffect(() => {
-    const abriuCom = document.activeElement as HTMLElement | null;
-    const rolagemAntes = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
-    function aoTeclar(evento: KeyboardEvent) {
-      if (evento.key === 'Escape') onFechar();
-    }
-    document.addEventListener('keydown', aoTeclar);
-
-    formulario.current?.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
-
-    return () => {
-      document.removeEventListener('keydown', aoTeclar);
-      document.body.style.overflow = rolagemAntes;
-      abriuCom?.focus?.();
-    };
-  }, [onFechar]);
+  const formulario = useDialogoModal<HTMLFormElement>(onFechar);
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();

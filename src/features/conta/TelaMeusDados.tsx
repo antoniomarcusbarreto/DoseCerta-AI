@@ -11,6 +11,7 @@ import { useAuth } from '@/features/auth/AuthProvider';
 import { getFunctionsCliente } from '@/lib/firebase';
 import * as biometriaService from '@/lib/biometriaService';
 import { useAmbiente } from '@/lib/useAmbiente';
+import { useDialogoModal } from '@/lib/useDialogoModal';
 
 const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
@@ -187,6 +188,10 @@ function ModalAlterarSenha({ onFechar }: { onFechar: () => void }) {
     }
   }
 
+  const dialogoRef = useDialogoModal<HTMLFormElement>(() => {
+    if (!carregando) onFechar();
+  });
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
@@ -196,7 +201,7 @@ function ModalAlterarSenha({ onFechar }: { onFechar: () => void }) {
     >
       <div aria-hidden="true" onClick={() => !carregando && onFechar()} className="absolute inset-0" />
 
-      <form onSubmit={confirmar} className="relative w-full max-w-sm rounded-2xl bg-card p-5">
+      <form ref={dialogoRef} onSubmit={confirmar} className="relative w-full max-w-sm rounded-2xl bg-card p-5">
         <h2 className="t-title text-ink">Alterar senha de acesso</h2>
         <p className="t-label mt-2 text-ink-muted">
           Depois de trocar a senha, você precisará entrar novamente.
@@ -307,6 +312,10 @@ function ModalExcluirConta({ onFechar }: { onFechar: () => void }) {
     }
   }
 
+  const dialogoRef = useDialogoModal<HTMLDivElement>(() => {
+    if (!carregando) onFechar();
+  });
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
@@ -316,7 +325,7 @@ function ModalExcluirConta({ onFechar }: { onFechar: () => void }) {
     >
       <div aria-hidden="true" onClick={() => !carregando && onFechar()} className="absolute inset-0" />
 
-      <div className="relative w-full max-w-sm rounded-2xl bg-card p-5">
+      <div ref={dialogoRef} className="relative w-full max-w-sm rounded-2xl bg-card p-5">
         <h2 className="t-title text-ink">Excluir Conta e Dados</h2>
         <p className="t-label mt-2 text-ink-muted">
           Atenção: Esta ação é permanente e irreversível. Todos os seus dados de tratamento,
