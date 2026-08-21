@@ -144,6 +144,31 @@ type VarreduraUsuarios = { total: number; comToken: QueryDocumentSnapshot[] };
  * crescer, o caminho é um booleano derivado (ex. `notificacoesAtivas`) mantido
  * junto com `fcmTokens`, aí a query volta a ser indexável.
  */
+/*
+ * Registra que uma rotina agendada rodou, e com que resultado.
+ *
+ * As rotinas só faziam `console.log`. Quando o log fica inacessível — e a
+ * ferramenta de log deste projeto costuma não alcançar os últimos dias —
+ * não havia como responder "o cron das 15:00 chegou a disparar hoje?", o que
+ * deixa qualquer investigação cega e convida a diagnosticar por palpite.
+ * Gravar aqui torna isso visível na própria tela de diagnóstico.
+ *
+ * Tudo num doc único (`sistema/rotinas`), com um campo por rotina: o
+ * diagnóstico lê uma vez só, e cada rotina escreve uma vez por execução.
+ * Best-effort de propósito — falhar ao registrar não pode derrubar um envio
+ * que já aconteceu.
+ */
+async function registrarExecucao(rotina: string, resumo: Record<string, unknown>): Promise<void> {
+  try {
+    await getFirestore()
+      .collection('sistema')
+      .doc('rotinas')
+      .set({ [rotina]: { executadaEm: Timestamp.now(), ...resumo } }, { merge: true });
+  } catch (falha) {
+    console.error('[registrarExecucao] falha ao registrar', rotina, falha);
+  }
+}
+
 async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
   const todos = await getFirestore().collection('users').get();
   return { total: todos.size, comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)) };
@@ -308,10 +333,9 @@ export const lembreteAplicacao = onSchedule(
       }
     }
 
-    console.log(
-      '[lembreteAplicacao]',
-      JSON.stringify({ agendasHoje: snap.docs.length, jaNotificados, notificados, semDispositivo, falhas }),
-    );
+    const resumo = { agendasHoje: snap.docs.length, jaNotificados, notificados, semDispositivo, falhas };
+    console.log('[lembreteAplicacao]', JSON.stringify(resumo));
+    await registrarExecucao('lembreteAplicacao', resumo);
   },
 );
 
@@ -360,16 +384,15 @@ export const acompanhamentoSintoma = onSchedule(
       }
     }
 
-    console.log(
-      '[acompanhamentoSintoma]',
-      JSON.stringify({
-        sintomasOntem: snap.docs.length,
-        usuariosDistintos: uidsNotificados.size,
-        notificados,
-        semDispositivo,
-        falhas,
-      }),
-    );
+    const resumo = {
+      sintomasOntem: snap.docs.length,
+      usuariosDistintos: uidsNotificados.size,
+      notificados,
+      semDispositivo,
+      falhas,
+    };
+    console.log('[acompanhamentoSintoma]', JSON.stringify(resumo));
+    await registrarExecucao('acompanhamentoSintoma', resumo);
   },
 );
 
@@ -445,10 +468,9 @@ export const hidratacaoMetadeDia = onSchedule(
       }
     }
 
-    console.log(
-      '[hidratacaoMetadeDia]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas }),
-    );
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas };
+    console.log('[hidratacaoMetadeDia]', JSON.stringify(resumo));
+    await registrarExecucao('hidratacaoMetadeDia', resumo);
   },
 );
 
@@ -490,10 +512,9 @@ export const hidratacaoRetaFinal = onSchedule(
       }
     }
 
-    console.log(
-      '[hidratacaoRetaFinal]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas }),
-    );
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas };
+    console.log('[hidratacaoRetaFinal]', JSON.stringify(resumo));
+    await registrarExecucao('hidratacaoRetaFinal', resumo);
   },
 );
 
@@ -627,10 +648,9 @@ export const nutricaoAlertaTarde = onSchedule(
       }
     }
 
-    console.log(
-      '[nutricaoAlertaTarde]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas }),
-    );
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas };
+    console.log('[nutricaoAlertaTarde]', JSON.stringify(resumo));
+    await registrarExecucao('nutricaoAlertaTarde', resumo);
   },
 );
 
@@ -680,10 +700,9 @@ export const nutricaoRetaFinal = onSchedule(
       }
     }
 
-    console.log(
-      '[nutricaoRetaFinal]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas }),
-    );
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas };
+    console.log('[nutricaoRetaFinal]', JSON.stringify(resumo));
+    await registrarExecucao('nutricaoRetaFinal', resumo);
   },
 );
 
@@ -730,10 +749,9 @@ export const engajamentoRotina = onSchedule(
       }
     }
 
-    console.log(
-      '[engajamentoRotina]',
-      JSON.stringify({ usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas }),
-    );
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas };
+    console.log('[engajamentoRotina]', JSON.stringify(resumo));
+    await registrarExecucao('engajamentoRotina', resumo);
   },
 );
 
@@ -980,7 +998,28 @@ export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, a
         ? ultimoPushRecebidoEm.getTime() - ultimoPushEnviadoEm.getTime()
         : null;
 
+    /*
+     * Última execução real de cada rotina agendada, gravada por
+     * `registrarExecucao`. É o que distingue "o cron não disparou" de "o cron
+     * disparou e me avaliou como inelegivel" — dois casos que, sem isto,
+     * chegam na tela exatamente iguais.
+     */
+    const execucoes: Record<string, { executadaEm: string; resumo: Record<string, unknown> }> = {};
+    try {
+      const doc = await db.collection('sistema').doc('rotinas').get();
+      for (const [nome, valor] of Object.entries(doc.data() ?? {})) {
+        const registro = valor as Record<string, unknown>;
+        const quando = comoData(registro.executadaEm);
+        if (!quando) continue;
+        const { executadaEm: _ignorado, ...resumo } = registro;
+        execucoes[nome] = { executadaEm: emBrt(quando), resumo };
+      }
+    } catch (falha) {
+      console.error('[diagnosticarNotificacoes] falha ao ler execuções', falha);
+    }
+
     return {
+      execucoes,
       dispositivo: {
         tokens: qtdTokens,
         achadoPelaVarredura,

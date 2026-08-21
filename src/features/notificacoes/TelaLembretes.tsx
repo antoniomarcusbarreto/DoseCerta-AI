@@ -39,6 +39,7 @@ type Diagnostico = {
   };
   avaliadoEm: string;
   rotinas: { rotina: string; dispararia: boolean; detalhe: string }[];
+  execucoes: Record<string, { executadaEm: string; resumo: Record<string, unknown> }>;
 };
 
 export function TelaLembretes() {
@@ -292,6 +293,33 @@ export function TelaLembretes() {
                     </li>
                   ))}
                 </ul>
+
+                <div
+                  className="p-3"
+                  style={{ background: 'var(--surface-sunken)', borderRadius: 'var(--r-field)' }}
+                >
+                  <p className="t-label text-ink">Última execução das rotinas no servidor</p>
+                  {Object.keys(diagnostico.execucoes).length === 0 ? (
+                    <p className="t-caption mt-1 text-ink-muted">
+                      Nenhuma rotina registrou execução ainda. Os registros começam na próxima vez
+                      que cada horário for atingido.
+                    </p>
+                  ) : (
+                    <ul className="mt-1 space-y-1">
+                      {Object.entries(diagnostico.execucoes).map(([nome, dados]) => (
+                        <li key={nome} className="t-caption text-ink-muted">
+                          <span className="text-ink">{nome}</span> — {dados.executadaEm}
+                          <br />
+                          <span className="text-ink-faint">
+                            {Object.entries(dados.resumo)
+                              .map(([chave, valor]) => `${chave}: ${String(valor)}`)
+                              .join(' · ')}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
 
                 <p className="t-caption text-ink-faint">Avaliado em {diagnostico.avaliadoEm}</p>
               </div>
