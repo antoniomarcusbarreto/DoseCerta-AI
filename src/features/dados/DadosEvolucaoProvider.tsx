@@ -1,6 +1,8 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useDados } from '@/features/dados/DadosProvider';
 import { useColecao } from '@/lib/useConsulta';
+import { useDiaCorrente } from '@/lib/useDiaCorrente';
+import { inicioDoDia, somarDias } from '@/domain/datas';
 import type {
   PlanoAlimentar,
   RegistroFoto,
@@ -25,14 +27,11 @@ import {
 
 /** Início da janela de 30 dias usada pelo card de evolução da Home — cobre os
  * 3 períodos de seleção (7/15/30 dias) via filtro client-side, mesmo padrão já
- * usado para `historicoPeso`. Calculado uma vez por montagem do provider; o
- * mesmo risco pré-existente de virar o dia com o app aberto já existe em
- * `consultaHidratacaoHoje`/`consultaSintomasUltimos7Dias`, não é regressão. */
-function inicioDaJanelaDe30Dias(): Date {
-  const data = new Date();
-  data.setHours(0, 0, 0, 0);
-  data.setDate(data.getDate() - 29);
-  return data;
+ * usado para `historicoPeso`. Como todo recorte por data, ancora no instante
+ * recebido, não no relógio do momento da chamada: é `useDiaCorrente` que decide
+ * quando a janela precisa ser refeita. */
+function inicioDaJanelaDe30Dias(referencia: Date): Date {
+  return inicioDoDia(somarDias(referencia, -29));
 }
 
 export type DadosEvolucao = {
@@ -72,6 +71,17 @@ const Contexto = createContext<DadosEvolucao | null>(null);
 export function DadosEvolucaoProvider({ children }: { children: ReactNode }) {
   const { uid } = useDados();
 
+  /*
+   * Justamente por viverem a sessão inteira, os listeners de janela de tempo
+   * precisam de um gatilho explícito para a virada do dia: a `chave` de cada um
+   * carrega o dia corrente, e é a mudança dela que refaz a assinatura com os
+   * limites novos. Sem isso o app mostrava o consumo de ontem sob o rótulo de
+   * hoje até alguém recarregar a página do zero — que em PWA quase nunca
+   * acontece, nem ao "fechar" o app pelo switcher.
+   */
+  const diaCorrente = useDiaCorrente();
+  const agora = new Date();
+
   const historicoPeso = useColecao(
     uid ? consultaHistoricoPeso(uid, 60) : null,
     uid ? `${uid}/weight_history` : null,
@@ -81,16 +91,16 @@ export function DadosEvolucaoProvider({ children }: { children: ReactNode }) {
     uid ? `${uid}/diet_plans` : null,
   );
   const refeicoesHoje = useColecao(
-    uid ? consultaRefeicoesDeHojeConcluidas(uid) : null,
-    uid ? `${uid}/meals/hoje` : null,
+    uid ? consultaRefeicoesDeHojeConcluidas(uid, agora) : null,
+    uid ? `${uid}/meals/hoje/${diaCorrente}` : null,
   );
   const hidratacaoHoje = useColecao(
-    uid ? consultaHidratacaoHoje(uid) : null,
-    uid ? `${uid}/hydration_logs/hoje` : null,
+    uid ? consultaHidratacaoHoje(uid, agora) : null,
+    uid ? `${uid}/hydration_logs/hoje/${diaCorrente}` : null,
   );
   const sintomas = useColecao(
-    uid ? consultaSintomasUltimos7Dias(uid) : null,
-    uid ? `${uid}/sintomas` : null,
+    uid ? consultaSintomasUltimos7Dias(uid, agora) : null,
+    uid ? `${uid}/sintomas/${diaCorrente}` : null,
   );
   const intestino = useColecao(
     uid ? consultaIntestinoRecentes(uid, 10) : null,
@@ -105,12 +115,12 @@ export function DadosEvolucaoProvider({ children }: { children: ReactNode }) {
     uid ? `${uid}/meals/todas` : null,
   );
   const hidratacao30d = useColecao(
-    uid ? consultaHidratacaoDesde(uid, inicioDaJanelaDe30Dias()) : null,
-    uid ? `${uid}/hydration_logs/30d` : null,
+    uid ? consultaHidratacaoDesde(uid, inicioDaJanelaDe30Dias(agora)) : null,
+    uid ? `${uid}/hydration_logs/30d/${diaCorrente}` : null,
   );
   const sintomas30d = useColecao(
-    uid ? consultaSintomasDesde(uid, inicioDaJanelaDe30Dias()) : null,
-    uid ? `${uid}/sintomas/30d` : null,
+    uid ? consultaSintomasDesde(uid, inicioDaJanelaDe30Dias(agora)) : null,
+    uid ? `${uid}/sintomas/30d/${diaCorrente}` : null,
   );
 
   const valor = useMemo<DadosEvolucao>(

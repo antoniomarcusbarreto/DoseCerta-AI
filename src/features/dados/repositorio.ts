@@ -37,6 +37,7 @@ import {
 } from '@/lib/firestore';
 import { proximaAplicacao } from '@/domain/aplicacao';
 import { CATALOGO_VERSAO, entradasPendentes, paraMedicamento } from '@/domain/catalogo';
+import { fimDoDia, inicioDoDia, somarDias } from '@/domain/datas';
 import { calcularMetaHidratacao } from '@/domain/hidratacao';
 import { calcularMetaCalorica, calcularMetaProteina, macrosProporcionais } from '@/domain/refeicao';
 import type {
@@ -671,53 +672,45 @@ export const consultaPlanosAlimentares = (uid: string) =>
 export const consultaFotosProgresso = (uid: string) =>
   query(colFotosProgresso(uid), orderBy('recordedAt', 'desc'));
 
-/** Refeições concluídas do dia corrente (hora local do dispositivo), da mais recente à mais antiga. */
-export const consultaRefeicoesDeHojeConcluidas = (uid: string) => {
-  const inicioDoDia = new Date();
-  inicioDoDia.setHours(0, 0, 0, 0);
-  const fimDoDia = new Date();
-  fimDoDia.setHours(23, 59, 59, 999);
+/*
+ * As três consultas abaixo recortam um intervalo de dias e por isso recebem o
+ * instante de referência de fora, em vez de chamarem `new Date()` aqui dentro.
+ * Os limites ficam gravados no objeto da query: se ele nascer do relógio do
+ * momento da montagem, o listener continua servindo a janela daquele dia para
+ * sempre — e o app, sendo PWA, passa dias sem recarregar. Quem assina usa
+ * `useDiaCorrente` para refazer a query quando o dia vira.
+ */
 
-  return query(
+/** Refeições concluídas do dia de `referencia` (hora local do dispositivo), da mais recente à mais antiga. */
+export const consultaRefeicoesDeHojeConcluidas = (uid: string, referencia: Date) =>
+  query(
     colRefeicoes(uid),
     where('status', '==', 'completed'),
-    where('createdAt', '>=', inicioDoDia),
-    where('createdAt', '<=', fimDoDia),
+    where('createdAt', '>=', inicioDoDia(referencia)),
+    where('createdAt', '<=', fimDoDia(referencia)),
     orderBy('createdAt', 'desc'),
   );
-};
 
 /** Todas as refeições concluídas do usuário, da mais recente à mais antiga. */
 export const consultaTodasRefeicoesConcluidas = (uid: string, maximo = 200) =>
   query(colRefeicoes(uid), where('status', '==', 'completed'), orderBy('createdAt', 'desc'), limit(maximo));
 
-/** Registros de hidratação do dia corrente (hora local do dispositivo), do mais recente ao mais antigo. */
-export const consultaHidratacaoHoje = (uid: string) => {
-  const inicioDoDia = new Date();
-  inicioDoDia.setHours(0, 0, 0, 0);
-  const fimDoDia = new Date();
-  fimDoDia.setHours(23, 59, 59, 999);
-
-  return query(
+/** Registros de hidratação do dia de `referencia` (hora local do dispositivo), do mais recente ao mais antigo. */
+export const consultaHidratacaoHoje = (uid: string, referencia: Date) =>
+  query(
     colHidratacao(uid),
-    where('recordedAt', '>=', inicioDoDia),
-    where('recordedAt', '<=', fimDoDia),
+    where('recordedAt', '>=', inicioDoDia(referencia)),
+    where('recordedAt', '<=', fimDoDia(referencia)),
     orderBy('recordedAt', 'desc'),
   );
-};
 
-/** Sintomas registrados nos últimos 7 dias, do mais recente ao mais antigo. */
-export const consultaSintomasUltimos7Dias = (uid: string) => {
-  const seteDiasAtras = new Date();
-  seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
-  seteDiasAtras.setHours(0, 0, 0, 0);
-
-  return query(
+/** Sintomas dos 7 dias que terminam em `referencia`, do mais recente ao mais antigo. */
+export const consultaSintomasUltimos7Dias = (uid: string, referencia: Date) =>
+  query(
     colSintomas(uid),
-    where('recordedAt', '>=', seteDiasAtras),
+    where('recordedAt', '>=', inicioDoDia(somarDias(referencia, -7))),
     orderBy('recordedAt', 'desc'),
   );
-};
 
 /** Registros de hidratação desde uma data de início (hora local), do mais
  * recente ao mais antigo. Usada pelo card de evolução da Home (períodos

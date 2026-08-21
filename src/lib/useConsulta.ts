@@ -14,9 +14,12 @@ export type Consulta<T> = {
  * então a tela aparece preenchida mesmo offline — o comportamento que faz
  * registrar aplicação sem rede valer a pena.
  *
- * `chave` é o identificador estável da assinatura (normalmente o uid mais o
- * nome da coleção). A referência da query é recriada a cada render e não serve
- * como dependência de efeito; sem a chave, o hook re-assinaria sem parar.
+ * `chave` é o identificador estável da assinatura. A referência da query é
+ * recriada a cada render e não serve como dependência de efeito; sem a chave, o
+ * hook re-assinaria sem parar. Em troca, a chave é o único jeito de reassinar:
+ * uma consulta cujos limites dependem do tempo (as janelas de "hoje", por
+ * exemplo) precisa carregar o dia corrente na chave, senão fica presa para
+ * sempre à janela do momento em que foi montada.
  */
 export function useColecao<T>(consulta: Query<T> | null, chave: string | null): Consulta<T[]> {
   const [estado, setEstado] = useState<Consulta<T[]>>({
@@ -31,7 +34,12 @@ export function useColecao<T>(consulta: Query<T> | null, chave: string | null): 
       return;
     }
 
-    setEstado((anterior) => ({ ...anterior, carregando: true }));
+    // Zera os dados junto, e não só `carregando`: quando a chave muda os
+    // resultados antigos deixaram de valer (é outra janela de tempo, ou outro
+    // usuário). Mantê-los até o primeiro snapshot faria a Home somar o consumo
+    // de ontem sob a data de hoje por um instante — o próprio bug que a chave
+    // com o dia corrente existe para corrigir.
+    setEstado({ dados: [], carregando: true, erro: null });
 
     return onSnapshot(
       consulta,

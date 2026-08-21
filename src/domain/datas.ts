@@ -9,6 +9,25 @@ export function inicioDoDia(data: Date): Date {
   return d;
 }
 
+/** Último instante local do dia de `data` — par de `inicioDoDia`. */
+export function fimDoDia(data: Date): Date {
+  const d = new Date(data);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+/**
+ * Identificador do dia de calendário local de `data`.
+ *
+ * Serve tanto para agrupar registros por dia nos gráficos quanto para detectar
+ * a virada do dia: enquanto a chave não muda, "hoje" continua sendo o mesmo
+ * dia. Deliberadamente montada a partir dos getters locais — `toISOString()`
+ * converteria para UTC e trocaria o dia de quem registra à noite.
+ */
+export function chaveDoDia(data: Date): string {
+  return `${data.getFullYear()}-${data.getMonth()}-${data.getDate()}`;
+}
+
 export function somarDias(data: Date, dias: number): Date {
   const d = new Date(data);
   d.setDate(d.getDate() + dias);

@@ -1,3 +1,7 @@
+// `chaveDoDia` mora no domínio (usada também fora dos gráficos, para detectar a
+// virada do dia); reexportada aqui para os gráficos manterem um só import.
+export { chaveDoDia } from "@/domain/datas";
+
 export const COR_PESO = "#14b8a6";
 export const COR_CINTURA = "#38bdf8";
 export const COR_CALORIAS = "#f97316";
@@ -7,10 +11,6 @@ export const COR_ALERTA_SINTOMA = "#ef4444";
 export const COR_INJECAO = "#a855f7";
 export const COR_EIXO = "#9ca3af";
 export const COR_GRADE = "rgba(156, 163, 175, 0.2)";
-
-export function chaveDoDia(data: Date): string {
-  return `${data.getFullYear()}-${data.getMonth()}-${data.getDate()}`;
-}
 
 /** Recorte por calendário (não por quantidade de pontos): dias sem registro
  * não "gastam" vaga de outro dia que esteja dentro da janela. */
