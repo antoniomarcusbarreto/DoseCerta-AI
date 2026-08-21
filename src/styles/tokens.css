@@ -71,6 +71,14 @@
   --danger: #b3372f;
   --danger-soft: #fbeae9;
 
+  /* ---- Botão primário ----
+     Os dois únicos pares de cor do sistema que variam por tema (Button.tsx
+     lê só isto — nenhuma ramificação de tema deve viver em componente). */
+  --btn-primary-bg: #1e293b;
+  --btn-primary-text: #ffffff;
+  --btn-primary-hero-bg: #ffffff;
+  --btn-primary-hero-text: #0f172a;
+
   /* ---- Forma ---- */
   --r-card: 24px;
   --r-glass: 20px;
@@ -228,6 +236,7 @@
 
   --btn-primary-bg: #0d9488;
   --btn-primary-text: #ffffff;
+  --btn-primary-hero-text: #0f766e;
 }
 
 :root[data-theme='lavanda-clara'] {
@@ -258,4 +267,5 @@
 
   --btn-primary-bg: #7c3aed;
   --btn-primary-text: #ffffff;
+  --btn-primary-hero-text: #6d28d9;
 }

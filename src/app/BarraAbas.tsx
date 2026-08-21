@@ -1,5 +1,4 @@
 import { NavLink } from 'react-router-dom';
-import { useTheme } from '@/features/theme/ThemeProvider';
 import { ABAS } from './abas';
 
 /**
@@ -7,20 +6,11 @@ import { ABAS } from './abas';
  *
  * Some no desktop (`lg:hidden`), onde a NavLateral assume — e `display: none`
  * a tira também da árvore de acessibilidade, evitando dois <nav> principais.
+ *
+ * A cor da aba ativa/inativa vem só de `--nav-ativo`/`--ink`/`--ink-muted`:
+ * nenhum tema precisa de código aqui, só de definir os tokens em tokens.css.
  */
 export function BarraAbas() {
-  const { theme } = useTheme();
-
-  const getEstilosAba = (isActive: boolean) => {
-    if (theme === 'menta-claro') {
-      return isActive ? 'bg-teal-100 text-teal-900' : 'text-slate-600';
-    }
-    if (theme === 'lavanda-clara') {
-      return isActive ? 'bg-fuchsia-100 text-fuchsia-900' : 'text-slate-600';
-    }
-    return isActive ? 'bg-white/10 text-white' : 'text-slate-400';
-  };
-
   return (
     <nav aria-label="Navegação principal" className="fixed inset-x-0 bottom-0 z-40 lg:hidden">
       {/*
@@ -43,9 +33,11 @@ export function BarraAbas() {
               <NavLink
                 to={aba.para}
                 end={aba.exato}
-                className={({ isActive }) =>
-                  `flex min-h-14 flex-col items-center justify-center gap-1 py-2 transition-colors ${getEstilosAba(isActive)}`
-                }
+                className="flex min-h-14 flex-col items-center justify-center gap-1 py-2 transition-colors"
+                style={({ isActive }) => ({
+                  background: isActive ? 'var(--nav-ativo)' : undefined,
+                  color: isActive ? 'var(--ink)' : 'var(--ink-muted)',
+                })}
               >
                 {({ isActive }) => (
                   <>

@@ -1,5 +1,4 @@
 import { Link, NavLink } from 'react-router-dom';
-import { useTheme } from '@/features/theme/ThemeProvider';
 import { ABAS } from './abas';
 
 const IconeSuporte = () => (
@@ -25,22 +24,11 @@ const IconeSuporte = () => (
  *
  * Não colocar `backdrop-filter` nem `transform` aqui: o elemento é `fixed`, e
  * qualquer um dos dois num ancestral reancoraria o posicionamento.
+ *
+ * A cor da aba ativa/inativa e do link de suporte vem só de
+ * `--nav-ativo`/`--ink`/`--ink-muted`: nenhum tema precisa de código aqui.
  */
 export function NavLateral() {
-  const { theme } = useTheme();
-
-  const getEstilosAba = (isActive: boolean) => {
-    if (theme === 'menta-claro') {
-      return isActive ? 'bg-teal-100 text-teal-900' : 'text-slate-600';
-    }
-    if (theme === 'lavanda-clara') {
-      return isActive ? 'bg-fuchsia-100 text-fuchsia-900' : 'text-slate-600';
-    }
-    return isActive ? 'bg-white/10 text-white' : 'text-slate-400';
-  };
-
-  const corSuporte = theme === 'oceano-escuro' ? 'text-slate-400' : 'text-slate-600';
-
   return (
     <nav
       aria-label="Navegação principal"
@@ -61,9 +49,11 @@ export function NavLateral() {
             <NavLink
               to={aba.para}
               end={aba.exato}
-              className={({ isActive }) =>
-                `flex min-h-11 items-center gap-3 rounded-[var(--r-field)] px-3 transition-colors hover:bg-sunken ${getEstilosAba(isActive)}`
-              }
+              className="flex min-h-11 items-center gap-3 rounded-[var(--r-field)] px-3 transition-colors hover:bg-sunken"
+              style={({ isActive }) => ({
+                background: isActive ? 'var(--nav-ativo)' : undefined,
+                color: isActive ? 'var(--ink)' : 'var(--ink-muted)',
+              })}
             >
               {({ isActive }) => (
                 <>
@@ -85,7 +75,8 @@ export function NavLateral() {
       <div className="mt-auto border-t pt-3" style={{ borderColor: 'var(--border-hair)' }}>
         <Link
           to="/ajustes/suporte"
-          className={`flex min-h-11 items-center gap-3 rounded-[var(--r-field)] px-3 transition-colors hover:bg-sunken ${corSuporte}`}
+          className="flex min-h-11 items-center gap-3 rounded-[var(--r-field)] px-3 transition-colors hover:bg-sunken"
+          style={{ color: 'var(--ink-muted)' }}
         >
           <span aria-hidden="true" style={{ opacity: 0.75 }}>
             <IconeSuporte />
