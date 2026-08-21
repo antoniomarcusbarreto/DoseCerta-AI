@@ -82,10 +82,24 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
     .map((r, i) => (!r.success && ehTokenInvalido(r.error?.code) ? tokens[i] : null))
     .filter((t): t is string => t !== null);
 
+  /*
+   * O carimbo de envio é gravado AQUI, no servidor, e não quando o aparelho
+   * confirma o recebimento. Enquanto ele dependia do Service Worker chamar de
+   * volta, um push que o dispositivo nunca recebia deixava os dois campos
+   * vazios — e o diagnóstico dizia "enviado: nunca" mesmo tendo enviado, que
+   * é exatamente o caso que a funcionalidade existia para distinguir.
+   * Vai junto da limpeza de tokens inválidos para não gastar duas escritas
+   * no mesmo documento.
+   */
+  const atualizacao: Record<string, unknown> = {};
   if (tokensInvalidos.length > 0) {
-    await docUsuario.update({
-      fcmTokens: tokens.filter((t) => !tokensInvalidos.includes(t)),
-    });
+    atualizacao.fcmTokens = tokens.filter((t) => !tokensInvalidos.includes(t));
+  }
+  if (resposta.successCount > 0) {
+    atualizacao.ultimoPushEnviadoEm = Timestamp.fromMillis(enviadoEm);
+  }
+  if (Object.keys(atualizacao).length > 0) {
+    await docUsuario.update(atualizacao);
   }
 
   // Só contagens e códigos de erro — o token em si nunca vai para o log.
@@ -1008,7 +1022,7 @@ export const confirmarRecebimentoPush = onRequest({ region: REGIAO, cors: true }
     return;
   }
 
-  const { uid, enviadoEm } = (request.body ?? {}) as { uid?: unknown; enviadoEm?: unknown };
+  const { uid } = (request.body ?? {}) as { uid?: unknown };
   if (typeof uid !== 'string' || uid.trim().length === 0) {
     response.status(400).send('uid inválido');
     return;
@@ -1023,13 +1037,14 @@ export const confirmarRecebimentoPush = onRequest({ region: REGIAO, cors: true }
       return;
     }
 
-    const epochEnviadoEm = typeof enviadoEm === 'string' ? Number(enviadoEm) : Number(enviadoEm);
-    const dados: Record<string, unknown> = { ultimoPushRecebidoEm: Timestamp.now() };
-    if (Number.isFinite(epochEnviadoEm)) {
-      dados.ultimoPushEnviadoEm = Timestamp.fromMillis(epochEnviadoEm);
-    }
-
-    await docUsuario.update(dados);
+    /*
+     * Só o recebimento é gravado aqui. `ultimoPushEnviadoEm` passou a ser
+     * escrito pelo próprio `enviarParaUsuario`, no servidor: é um dado de
+     * envio, e deixar o cliente reescrevê-lo permitiria a qualquer chamada
+     * a esta rota (que é pública, por não haver sessão dentro do Service
+     * Worker) forjar o carimbo que o diagnóstico usa como prova.
+     */
+    await docUsuario.update({ ultimoPushRecebidoEm: Timestamp.now() });
     response.status(204).send();
   } catch (falha) {
     console.error('[confirmarRecebimentoPush] falha', uid, falha);
