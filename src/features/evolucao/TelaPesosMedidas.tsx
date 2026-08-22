@@ -67,6 +67,18 @@ function arredondar1Casa(valor: number): number {
   return Math.round(valor * 10) / 10;
 }
 
+/** Data local (não UTC) no formato que `<input type="date">` espera. */
+function paraInputData(data: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${data.getFullYear()}-${pad(data.getMonth() + 1)}-${pad(data.getDate())}`;
+}
+
+/** Inverso de `paraInputData` — monta a data em horário local, nunca UTC (`new Date('YYYY-MM-DD')` viraria o dia em fusos negativos). */
+function deInputData(valor: string): Date {
+  const [ano, mes, dia] = valor.split('-').map(Number);
+  return new Date(ano, mes - 1, dia);
+}
+
 /**
  * Registro de peso e medidas.
  *
@@ -91,6 +103,7 @@ export function TelaPesosMedidas() {
   const alturaSalva = usuario?.height ?? null;
   const precisaAltura = !carregandoAltura && alturaSalva === null;
 
+  const [data, setData] = useState(() => paraInputData(new Date()));
   const [peso, setPeso] = useState('');
   const [cintura, setCintura] = useState('');
   const [altura, setAltura] = useState('');
@@ -118,6 +131,10 @@ export function TelaPesosMedidas() {
     if (!uid) return;
     setErro(null);
 
+    if (!data) {
+      setErro('Informe a data.');
+      return;
+    }
     if (!Number.isFinite(pesoNum) || pesoNum <= 0) {
       setErro('Informe um peso válido.');
       return;
@@ -137,15 +154,17 @@ export function TelaPesosMedidas() {
         weight: pesoNum,
         waist: cintura ? Number(cintura) : null,
         notes: notas || null,
+        recordedAt: deInputData(data),
       };
 
       if (registroEmEdicao) {
         await atualizarRegistroPeso(uid, registroEmEdicao.id, camposRegistro);
         setRegistroEmEdicao(null);
       } else {
-        await criarRegistroPeso(uid, { ...camposRegistro, recordedAt: new Date() });
+        await criarRegistroPeso(uid, camposRegistro);
       }
 
+      setData(paraInputData(new Date()));
       setPeso('');
       setCintura('');
       setAltura('');
@@ -186,6 +205,7 @@ export function TelaPesosMedidas() {
   function iniciarEdicao(registro: RegistroPeso) {
     setErro(null);
     setRegistroEmEdicao(registro);
+    setData(paraInputData(registro.recordedAt));
     setPeso(registro.weight.toString());
     setCintura(registro.waist !== null ? registro.waist.toString() : '');
     setNotas(registro.notes ?? '');
@@ -193,6 +213,7 @@ export function TelaPesosMedidas() {
 
   function cancelarEdicao() {
     setRegistroEmEdicao(null);
+    setData(paraInputData(new Date()));
     setPeso('');
     setCintura('');
     setNotas('');
@@ -251,6 +272,15 @@ export function TelaPesosMedidas() {
     >
       <SheetCard titulo="Novo registro">
         <form onSubmit={aoEnviar} className="flex flex-col gap-4">
+          <Field
+            rotulo="Data"
+            type="date"
+            required
+            max={paraInputData(new Date())}
+            value={data}
+            onChange={(e) => setData(e.target.value)}
+          />
+
           {precisaAltura ? (
             <Field
               rotulo="Altura (m)"
