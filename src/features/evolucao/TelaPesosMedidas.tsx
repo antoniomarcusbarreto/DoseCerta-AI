@@ -7,11 +7,19 @@ import { Field } from '@/components/Field';
 import { Hero } from '@/components/Hero';
 import { Pagina } from '@/components/Pagina';
 import { SheetCard } from '@/components/SheetCard';
+import { useConfirm } from '@/contexts/ConfirmContext';
 import { calcularMetaHidratacao } from '@/domain/hidratacao';
 import { calcularImc, deltaPeso } from '@/domain/medidas';
+import type { RegistroPeso } from '@/domain/tipos';
 import { useDados } from '@/features/dados/DadosProvider';
 import { useEvolucao } from '@/features/dados/DadosEvolucaoProvider';
-import { atualizarAltura, atualizarMetaHidratacao, criarRegistroPeso } from '@/features/dados/repositorio';
+import {
+  atualizarAltura,
+  atualizarMetaHidratacao,
+  atualizarRegistroPeso,
+  criarRegistroPeso,
+  excluirRegistroPeso,
+} from '@/features/dados/repositorio';
 import { refUsuario } from '@/lib/firestore';
 import { useDocumento } from '@/lib/useConsulta';
 
@@ -19,6 +27,32 @@ const IconeVoltar = () => (
   <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
     <path
       d="M14.5 5.5L8 12l6.5 6.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const IconeEditar = () => (
+  <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+    <path
+      d="M4 20h4L18.5 9.5a2.121 2.121 0 0 0-3-3L5 17v3Z M14.5 8l2 2"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const IconeExcluir = () => (
+  <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+    <path
+      d="M5 7h14M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-.8 12.2A2 2 0 0 1 14.2 21H9.8a2 2 0 0 1-2-1.8L7 7m3 4v6m4-6v6"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.75"
@@ -43,6 +77,7 @@ function arredondar1Casa(valor: number): number {
 export function TelaPesosMedidas() {
   const navegar = useNavigate();
   const { uid } = useDados();
+  const { askConfirm } = useConfirm();
 
   const refUsuarioAtual = uid ? refUsuario(uid) : null;
   const { dados: usuario, carregando: carregandoAltura } = useDocumento(refUsuarioAtual);
@@ -63,6 +98,7 @@ export function TelaPesosMedidas() {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [sugestaoMetaAgua, setSugestaoMetaAgua] = useState<number | null>(null);
+  const [registroEmEdicao, setRegistroEmEdicao] = useState<RegistroPeso | null>(null);
 
   if (!uid) return null;
 
@@ -86,22 +122,30 @@ export function TelaPesosMedidas() {
       setErro('Informe um peso válido.');
       return;
     }
-    if (precisaAltura && (!Number.isFinite(alturaM) || alturaM <= 0)) {
+    if (!registroEmEdicao && precisaAltura && (!Number.isFinite(alturaM) || alturaM <= 0)) {
       setErro('Informe a altura.');
       return;
     }
 
     setSalvando(true);
     try {
-      if (precisaAltura) {
+      if (!registroEmEdicao && precisaAltura) {
         await atualizarAltura(uid, alturaM);
       }
-      await criarRegistroPeso(uid, {
+
+      const camposRegistro = {
         weight: pesoNum,
         waist: cintura ? Number(cintura) : null,
-        recordedAt: new Date(),
         notes: notas || null,
-      });
+      };
+
+      if (registroEmEdicao) {
+        await atualizarRegistroPeso(uid, registroEmEdicao.id, camposRegistro);
+        setRegistroEmEdicao(null);
+      } else {
+        await criarRegistroPeso(uid, { ...camposRegistro, recordedAt: new Date() });
+      }
+
       setPeso('');
       setCintura('');
       setAltura('');
@@ -118,7 +162,11 @@ export function TelaPesosMedidas() {
       }
     } catch (falha) {
       console.error('[DoseCerta] falha ao registrar peso', falha);
-      setErro('Não foi possível salvar o registro. Tente novamente.');
+      setErro(
+        registroEmEdicao
+          ? 'Não foi possível atualizar o registro. Tente novamente.'
+          : 'Não foi possível salvar o registro. Tente novamente.',
+      );
     } finally {
       setSalvando(false);
     }
@@ -133,6 +181,42 @@ export function TelaPesosMedidas() {
       console.error('[DoseCerta] falha ao recalcular meta de hidratação', falha);
       setErro('Não foi possível atualizar a meta de água. Tente novamente.');
     }
+  }
+
+  function iniciarEdicao(registro: RegistroPeso) {
+    setErro(null);
+    setRegistroEmEdicao(registro);
+    setPeso(registro.weight.toString());
+    setCintura(registro.waist !== null ? registro.waist.toString() : '');
+    setNotas(registro.notes ?? '');
+  }
+
+  function cancelarEdicao() {
+    setRegistroEmEdicao(null);
+    setPeso('');
+    setCintura('');
+    setNotas('');
+    setErro(null);
+  }
+
+  function confirmarExclusao(registro: RegistroPeso) {
+    askConfirm({
+      title: 'Excluir registro',
+      message: `Excluir o registro de ${registro.weight.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} kg de ${registro.recordedAt.toLocaleDateString('pt-BR')}? Essa ação não pode ser desfeita.`,
+      confirmText: 'Excluir',
+      onConfirm: async () => {
+        if (!uid) return;
+        try {
+          await excluirRegistroPeso(uid, registro.id);
+          if (registroEmEdicao?.id === registro.id) {
+            cancelarEdicao();
+          }
+        } catch (falha) {
+          console.error('[DoseCerta] falha ao excluir registro de peso', falha);
+          setErro('Não foi possível excluir o registro. Tente novamente.');
+        }
+      },
+    });
   }
 
   return (
@@ -214,9 +298,22 @@ export function TelaPesosMedidas() {
 
           {erro ? <Alerta tom="danger" titulo={erro} /> : null}
 
-          <Button type="submit" larguraTotal disabled={salvando}>
-            {salvando ? 'Salvando…' : 'Salvar registro'}
-          </Button>
+          <div className="flex gap-2">
+            <Button type="submit" larguraTotal disabled={salvando}>
+              {registroEmEdicao
+                ? salvando
+                  ? 'Atualizando…'
+                  : 'Atualizar registro'
+                : salvando
+                  ? 'Salvando…'
+                  : 'Salvar registro'}
+            </Button>
+            {registroEmEdicao ? (
+              <Button type="button" variante="fantasma" onClick={cancelarEdicao}>
+                Cancelar
+              </Button>
+            ) : null}
+          </div>
         </form>
 
         {sugestaoMetaAgua !== null ? (
@@ -247,7 +344,10 @@ export function TelaPesosMedidas() {
         ) : (
           <ul className="divide-y" style={{ borderColor: 'var(--border-hair)' }}>
             {historico.map((registro) => (
-              <li key={registro.id} className="flex items-baseline justify-between gap-4 py-3">
+              <li
+                key={registro.id}
+                className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-3"
+              >
                 <div className="min-w-0">
                   <p className="t-label text-ink">
                     {registro.weight.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} kg
@@ -262,6 +362,24 @@ export function TelaPesosMedidas() {
                 <span className="t-caption shrink-0 text-ink-muted">
                   {registro.recordedAt.toLocaleDateString('pt-BR')}
                 </span>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label="Editar registro"
+                    onClick={() => iniciarEdicao(registro)}
+                    className="flex size-11 items-center justify-center rounded-full text-ink-muted transition-opacity hover:opacity-70"
+                  >
+                    <IconeEditar />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Excluir registro"
+                    onClick={() => confirmarExclusao(registro)}
+                    className="flex size-11 items-center justify-center rounded-full text-ink-muted transition-opacity hover:opacity-70"
+                  >
+                    <IconeExcluir />
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

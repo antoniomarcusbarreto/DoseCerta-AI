@@ -289,6 +289,18 @@ export async function criarRegistroPeso(uid: string, novo: NovoRegistroPeso): Pr
   return criado.id;
 }
 
+export async function atualizarRegistroPeso(
+  uid: string,
+  registroId: string,
+  campos: Partial<NovoRegistroPeso>,
+): Promise<void> {
+  await updateDoc(doc(colHistoricoPeso(uid), registroId), campos);
+}
+
+export async function excluirRegistroPeso(uid: string, registroId: string): Promise<void> {
+  await deleteDoc(doc(colHistoricoPeso(uid), registroId));
+}
+
 /** Progressive profiling: só é chamado na primeira vez que a pessoa registra um peso sem altura salva. */
 export async function atualizarAltura(uid: string, height: number): Promise<void> {
   await setDoc(refUsuario(uid), { height }, { merge: true });
