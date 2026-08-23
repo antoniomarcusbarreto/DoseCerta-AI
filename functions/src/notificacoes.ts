@@ -27,7 +27,10 @@ const ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE = 15;
  */
 const MAX_DISPOSITIVOS = 5;
 
-type SaudeToken = {
+type Dispositivo = {
+  token: string;
+  status: 'ativo' | 'inativo';
+  plataforma?: string;
   enviosSemConfirmacao?: number;
   ultimoEnvioEm?: unknown;
   ultimoRecebimentoEm?: unknown;
@@ -38,11 +41,16 @@ type SaudeToken = {
  *
  * O token em si nunca vai para log nem trafega de volta do aparelho: é
  * credencial de envio. O hash permite o Service Worker dizer "fui eu que
- * recebi" sem expor nada, e dá sempre a mesma chave para o mesmo token.
- * Só hex, então serve como caminho de campo do Firestore sem escape.
+ * recebi" sem expor nada, e dá sempre a mesma chave para o mesmo token — é o
+ * próprio id do documento em `users/{uid}/dispositivos/{id}`. Só hex, então
+ * serve como caminho de campo/id do Firestore sem escape.
  */
-function idDoToken(token: string): string {
+export function idDoToken(token: string): string {
   return createHash('sha256').update(token).digest('hex').slice(0, 20);
+}
+
+function colecaoDispositivos(uid: string) {
+  return getFirestore().collection('users').doc(uid).collection('dispositivos');
 }
 
 /**
@@ -71,24 +79,26 @@ function idDoToken(token: string): string {
 export async function enviarParaUsuario(uid: string, titulo: string, corpo: string): Promise<number> {
   const db = getFirestore();
   const docUsuario = db.collection('users').doc(uid);
-  const snap = await docUsuario.get();
-  const tokens = (snap.data()?.fcmTokens ?? []) as string[];
+  const dispositivosSnap = await colecaoDispositivos(uid).where('status', '==', 'ativo').get();
+  const dispositivos = dispositivosSnap.docs;
+  const tokens = dispositivos.map((d) => (d.data() as Dispositivo).token);
+
   if (tokens.length === 0) {
     /*
      * Autocorreção de custo zero: se `notificacoesAtivas` ainda estiver
-     * `true` sem token nenhum (ex. o "Reset Total" removeu o último token
-     * sem mexer na flag, de propósito — ver `removerTokenFcm`), corrige aqui,
-     * no próximo ciclo em que este usuário for varrido, sem leitura extra:
-     * o doc já foi lido para chegar até aqui.
+     * `true` sem dispositivo nenhum (ex. o "Reset Total" removeu o último
+     * dispositivo sem mexer na flag, de propósito — ver `removerTokenFcm`),
+     * corrige aqui, no próximo ciclo em que este usuário for varrido.
      */
-    if (snap.data()?.notificacoesAtivas === true) {
-      await docUsuario.update({ notificacoesAtivas: false });
+    const usuario = await docUsuario.get();
+    if (usuario.data()?.notificacoesAtivas === true || usuario.data()?.totalDispositivosAtivos > 0) {
+      await docUsuario.update({ notificacoesAtivas: false, totalDispositivosAtivos: 0 });
     }
     console.log('[enviarParaUsuario]', JSON.stringify({ uid, tokens: 0, enviados: 0 }));
     return 0;
   }
 
-  const saude = (snap.data()?.saudeTokens ?? {}) as Record<string, SaudeToken>;
+  const saude = new Map(dispositivos.map((d) => [d.id, d.data() as Dispositivo]));
   const enviadoEm = Date.now();
 
   /*
@@ -98,14 +108,16 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
    * token, cada uma leva o seu `dispositivoId`. O custo é o mesmo: o
    * multicast também despacha individualmente por baixo.
    */
-  const mensagens = tokens.map((token) => ({
+  const ids = dispositivos.map((d) => d.id);
+
+  const mensagens = tokens.map((token, i) => ({
     token,
     /*
      * `notification` no topo é obrigatório: sem ele o iOS trata a mensagem
      * como data-only e não exibe banner nenhum com o app fechado.
      */
     notification: { title: titulo, body: corpo },
-    data: { uid, dispositivoId: idDoToken(token), enviadoEm: String(enviadoEm) },
+    data: { uid, dispositivoId: ids[i], enviadoEm: String(enviadoEm) },
     /*
      * Bloco `apns` explícito: o iOS descarta o push silenciosamente com o
      * app em force-close se a prioridade/tipo não vierem declarados aqui.
@@ -140,52 +152,59 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
   // (1) mortos declarados pelo próprio FCM
   const descartar = new Set<string>();
   resposta.responses.forEach((r, i) => {
-    if (!r.success && ehTokenInvalido(r.error?.code)) descartar.add(tokens[i]);
+    if (!r.success && ehTokenInvalido(r.error?.code)) descartar.add(ids[i]);
   });
 
-  // (2) fantasmas — só quando há outro token da conta que já confirmou
-  const existeSaudavel = tokens.some(
-    (t) => !descartar.has(t) && saude[idDoToken(t)]?.ultimoRecebimentoEm,
-  );
+  // (2) fantasmas — só quando há outro dispositivo da conta que já confirmou
+  const existeSaudavel = ids.some((id) => !descartar.has(id) && saude.get(id)?.ultimoRecebimentoEm);
   if (existeSaudavel) {
-    for (const token of tokens) {
-      if (descartar.has(token)) continue;
-      const s = saude[idDoToken(token)];
+    for (const id of ids) {
+      if (descartar.has(id)) continue;
+      const s = saude.get(id);
       const nuncaConfirmou = !s?.ultimoRecebimentoEm;
       const semConfirmacao = s?.enviosSemConfirmacao ?? 0;
       if (nuncaConfirmou && semConfirmacao >= ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE) {
-        descartar.add(token);
+        descartar.add(id);
       }
     }
   }
 
   // (3) teto: mantém os que confirmaram mais recentemente
-  let restantes = tokens.filter((t) => !descartar.has(t));
+  let restantes = ids.filter((id) => !descartar.has(id));
   if (restantes.length > MAX_DISPOSITIVOS) {
-    const quando = (t: string) => {
-      const valor = saude[idDoToken(t)]?.ultimoRecebimentoEm;
+    const quando = (id: string) => {
+      const valor = saude.get(id)?.ultimoRecebimentoEm;
       return valor instanceof Timestamp ? valor.toMillis() : 0;
     };
     const ordenados = [...restantes].sort((a, b) => quando(b) - quando(a));
-    for (const token of ordenados.slice(MAX_DISPOSITIVOS)) descartar.add(token);
+    for (const id of ordenados.slice(MAX_DISPOSITIVOS)) descartar.add(id);
     restantes = ordenados.slice(0, MAX_DISPOSITIVOS);
   }
 
-  const atualizacao: Record<string, unknown> = {};
+  /*
+   * Todo write desta rotina — poda de dispositivo, contador de saúde e o
+   * total agregado no doc raiz — sai num único `batch`. Um `batch` não aceita
+   * duas chamadas separadas de `update` sobre o MESMO documento, então cada
+   * documento (o usuário, e cada dispositivo) acumula suas mudanças num único
+   * objeto antes de entrar no lote.
+   */
+  const atualizacoesPorDispositivo = new Map<string, Record<string, unknown>>();
+  const atualizacaoUsuario: Record<string, unknown> = {};
 
-  if (descartar.size > 0) {
-    atualizacao.fcmTokens = restantes;
-    for (const token of descartar) {
-      atualizacao[`saudeTokens.${idDoToken(token)}`] = FieldValue.delete();
+  const paraDispositivo = (id: string): Record<string, unknown> => {
+    let atual = atualizacoesPorDispositivo.get(id);
+    if (!atual) {
+      atual = {};
+      atualizacoesPorDispositivo.set(id, atual);
     }
-    /*
-     * A poda esvaziou o array por completo: marca `notificacoesAtivas: false`
-     * agora, no mesmo write, em vez de esperar o próximo ciclo achar o early
-     * return acima — tira este usuário da query indexada já na próxima rotina.
-     */
-    if (restantes.length === 0) {
-      atualizacao.notificacoesAtivas = false;
-    }
+    return atual;
+  };
+
+  for (const id of descartar) {
+    // Marca inativo em vez de apagar: preserva o histórico de saúde do
+    // dispositivo para diagnóstico, e evita recriar o doc do zero se o
+    // mesmo token voltar a ser salvo pelo cliente antes de expirar de vez.
+    paraDispositivo(id).status = 'inativo';
   }
 
   /*
@@ -195,7 +214,7 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
    * diagnóstico dizia "enviado: nunca" mesmo tendo enviado com sucesso.
    */
   if (resposta.successCount > 0) {
-    atualizacao.ultimoPushEnviadoEm = Timestamp.fromMillis(enviadoEm);
+    atualizacaoUsuario.ultimoPushEnviadoEm = Timestamp.fromMillis(enviadoEm);
   }
 
   /*
@@ -203,26 +222,42 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
    * confirmado zera. É ele que denuncia o fantasma.
    */
   resposta.responses.forEach((r, i) => {
-    const token = tokens[i];
-    if (!r.success || descartar.has(token)) return;
-    const chave = `saudeTokens.${idDoToken(token)}`;
-    atualizacao[`${chave}.ultimoEnvioEm`] = Timestamp.fromMillis(enviadoEm);
-    atualizacao[`${chave}.enviosSemConfirmacao`] = FieldValue.increment(1);
+    const id = ids[i];
+    if (!r.success || descartar.has(id)) return;
+    const atual = paraDispositivo(id);
+    atual.ultimoEnvioEm = Timestamp.fromMillis(enviadoEm);
+    atual.enviosSemConfirmacao = FieldValue.increment(1);
   });
 
   /*
-   * Entradas de saúde sem token correspondente: sobram quando um token sai
-   * por outro caminho que não esta função — o "Reset Total" do app remove do
-   * array direto. Sem varrer isso, o documento do usuário cresce para sempre,
-   * que é justamente o que não pode acontecer quando a base escalar.
+   * A poda mudou a contagem de dispositivos ativos — mantém o campo
+   * agregado no doc raiz em dia, é ele que sustenta a query indexada de
+   * `usuariosComNotificacoes` sem exigir leitura da subcoleção.
    */
-  const idsVivos = new Set(restantes.map(idDoToken));
-  for (const id of Object.keys(saude)) {
-    if (!idsVivos.has(id)) atualizacao[`saudeTokens.${id}`] = FieldValue.delete();
+  if (descartar.size > 0) {
+    atualizacaoUsuario.totalDispositivosAtivos = restantes.length;
+    // A poda esvaziou tudo: tira este usuário da query indexada já na
+    // próxima rotina, em vez de esperar o próximo ciclo achar o early
+    // return no topo desta função.
+    if (restantes.length === 0) {
+      atualizacaoUsuario.notificacoesAtivas = false;
+    }
   }
 
-  if (Object.keys(atualizacao).length > 0) {
-    await docUsuario.update(atualizacao);
+  const lote = db.batch();
+  let mudou = false;
+
+  for (const [id, dados] of atualizacoesPorDispositivo) {
+    lote.update(colecaoDispositivos(uid).doc(id), dados);
+    mudou = true;
+  }
+  if (Object.keys(atualizacaoUsuario).length > 0) {
+    lote.update(docUsuario, atualizacaoUsuario);
+    mudou = true;
+  }
+
+  if (mudou) {
+    await lote.commit();
   }
 
   // Só contagens e códigos de erro — o token em si nunca vai para o log.
@@ -247,8 +282,8 @@ function ehTokenInvalido(codigo: string | undefined): boolean {
   );
 }
 
-function temTokens(valor: unknown): boolean {
-  return Array.isArray(valor) && valor.length > 0;
+function temDispositivosAtivos(valor: unknown): boolean {
+  return typeof valor === 'number' && valor > 0;
 }
 
 /*
@@ -290,6 +325,47 @@ async function registrarExecucao(rotina: string, resumo: Record<string, unknown>
   }
 }
 
+/** `rotina_AAAAMMDD_HHmm` no fuso de São Paulo — a chave do lock de execução. */
+function idExecucao(rotina: string, instante: Date): string {
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: FUSO,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(instante);
+  const campo = (tipo: string) => partes.find((p) => p.type === tipo)?.value ?? '00';
+  return `${rotina}_${campo('year')}${campo('month')}${campo('day')}_${campo('hour')}${campo('minute')}`;
+}
+
+/**
+ * Trava distribuída de idempotência: tenta criar um doc único para esta
+ * rotina neste minuto exato. `create()` falha com ALREADY_EXISTS se o doc já
+ * existir — é atômico no Firestore, então duas invocações concorrentes do
+ * mesmo cron (cold start duplicado, retry do Cloud Scheduler) nunca passam
+ * as duas. Quem perde a corrida aborta sem tocar em nada mais: nenhum envio,
+ * nenhum `registrarExecucao`.
+ */
+async function adquirirLock(rotina: string, agora: Date): Promise<boolean> {
+  const id = idExecucao(rotina, agora);
+  try {
+    // `sistema/execucoes` é um doc-namespace, só para agrupar a subcoleção de
+    // locks no mesmo lugar que `sistema/rotinas` guarda o resumo de execução.
+    await getFirestore()
+      .collection('sistema')
+      .doc('execucoes')
+      .collection('locks')
+      .doc(id)
+      .create({ criadaEm: Timestamp.now() });
+    return true;
+  } catch (falha) {
+    console.log('[adquirirLock] execução já em andamento ou concluída, abortando', id, falha);
+    return false;
+  }
+}
+
 export async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
   const db = getFirestore();
 
@@ -297,7 +373,7 @@ export async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
    * Query indexada: lê só quem tem `notificacoesAtivas === true`, mantido
    * por `salvarTokenFcm` (cliente) e `enviarParaUsuario` (servidor). É uma
    * única igualdade — não exige índice composto, o Firestore auto-indexa
-   * campo único por padrão. `temTokens` continua filtrando por cima como
+   * campo único por padrão. `temDispositivosAtivos` continua filtrando por cima como
    * segunda trava: se a flag ficou desatualizada em algum caso não previsto,
    * o pior resultado é avaliar um usuário a mais, nunca a menos.
    *
@@ -340,14 +416,14 @@ export async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
       const todos = await db.collection('users').get();
       return {
         total: todos.size,
-        comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)),
+        comToken: todos.docs.filter((doc) => temDispositivosAtivos(doc.data().totalDispositivosAtivos)),
         fonte: 'fallback',
       };
     }
 
     return {
       total: totalSnap.data().count,
-      comToken: comTokenSnap.docs.filter((doc) => temTokens(doc.data().fcmTokens)),
+      comToken: comTokenSnap.docs.filter((doc) => temDispositivosAtivos(doc.data().totalDispositivosAtivos)),
       fonte: 'indexada',
     };
   } catch (falha) {
@@ -361,7 +437,7 @@ export async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
     const todos = await db.collection('users').get();
     return {
       total: todos.size,
-      comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)),
+      comToken: todos.docs.filter((doc) => temDispositivosAtivos(doc.data().totalDispositivosAtivos)),
       fonte: 'fallback',
     };
   }
@@ -483,8 +559,10 @@ export const testarNotificacao = onCall({ region: REGIAO, cors: true }, async (r
 export const lembreteAplicacao = onSchedule(
   { schedule: '0 8 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const db = getFirestore();
     const agora = new Date();
+    if (!(await adquirirLock('lembreteAplicacao', agora))) return;
+
+    const db = getFirestore();
     const inicio = Timestamp.fromDate(inicioDoDia(agora));
     const fim = Timestamp.fromDate(fimDoDia(agora));
 
@@ -538,6 +616,8 @@ export const lembreteAplicacao = onSchedule(
 export const acompanhamentoSintoma = onSchedule(
   { schedule: '0 10 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
+    if (!(await adquirirLock('acompanhamentoSintoma', new Date()))) return;
+
     const db = getFirestore();
     // 24h atrás e depois recortado pelos helpers de fuso — `setDate` aqui
     // usaria o calendário UTC e cairia no dia errado perto da meia-noite.
@@ -632,6 +712,8 @@ async function totalHidratacaoHoje(userRef: FirebaseFirestore.DocumentReference)
 export const hidratacaoMetadeDia = onSchedule(
   { schedule: '0 15 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
+    if (!(await adquirirLock('hidratacaoMetadeDia', new Date()))) return;
+
     const { total, comToken, fonte } = await usuariosComNotificacoes();
 
     let elegiveis = 0;
@@ -675,6 +757,8 @@ export const hidratacaoMetadeDia = onSchedule(
 export const hidratacaoRetaFinal = onSchedule(
   { schedule: '0 19 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
+    if (!(await adquirirLock('hidratacaoRetaFinal', new Date()))) return;
+
     const { total, comToken, fonte } = await usuariosComNotificacoes();
 
     let elegiveis = 0;
@@ -804,6 +888,8 @@ async function consumoNutricaoHoje(
 export const nutricaoAlertaTarde = onSchedule(
   { schedule: '0 16 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
+    if (!(await adquirirLock('nutricaoAlertaTarde', new Date()))) return;
+
     const { total, comToken, fonte } = await usuariosComNotificacoes();
 
     let semMetas = 0;
@@ -855,6 +941,8 @@ export const nutricaoAlertaTarde = onSchedule(
 export const nutricaoRetaFinal = onSchedule(
   { schedule: '0 20 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
+    if (!(await adquirirLock('nutricaoRetaFinal', new Date()))) return;
+
     const { total, comToken, fonte } = await usuariosComNotificacoes();
 
     let semMetas = 0;
@@ -902,12 +990,14 @@ export const nutricaoRetaFinal = onSchedule(
 const SEMANA_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Toda sexta-feira às 18:00: quem está com `fcmTokens` cadastrados mas sem
+ * Toda sexta-feira às 18:00: quem tem dispositivo ativo cadastrado mas sem
  * registro de peso nos últimos 7 dias recebe um lembrete de check-in.
  */
 export const engajamentoRotina = onSchedule(
   { schedule: '0 18 * * 5', timeZone: FUSO, region: REGIAO },
   async () => {
+    if (!(await adquirirLock('engajamentoRotina', new Date()))) return;
+
     const { total, comToken, fonte } = await usuariosComNotificacoes();
     const limite = Timestamp.fromDate(new Date(Date.now() - SEMANA_MS));
     let elegiveis = 0;
@@ -970,8 +1060,7 @@ export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, a
   try {
     const db = getFirestore();
     const usuario = await db.collection('users').doc(uid).get();
-    const tokens = usuario.data()?.fcmTokens;
-    const qtdTokens = Array.isArray(tokens) ? tokens.length : 0;
+    const qtdTokens = Number(usuario.data()?.totalDispositivosAtivos ?? 0);
 
     const varredura = await usuariosComNotificacoes();
     const achadoPelaVarredura = varredura.comToken.some((doc) => doc.id === uid);
@@ -1265,21 +1354,22 @@ export const confirmarRecebimentoPush = onRequest({ region: REGIAO, cors: true }
      * Worker) forjar o carimbo que o diagnóstico usa como prova.
      */
     const agora = Timestamp.now();
-    const dados: Record<string, unknown> = { ultimoPushRecebidoEm: agora };
+    await docUsuario.update({ ultimoPushRecebidoEm: agora });
 
     /*
      * Zerar o contador do dispositivo que confirmou é o que mantém a poda
      * honesta: só quem nunca acorda acumula envios sem confirmação e acaba
      * descartado. `dispositivoId` é hex de 20 caracteres vindo do payload que
      * o próprio servidor mandou — validado aqui porque a rota é pública e
-     * vira caminho de campo no Firestore.
+     * é usado como id de documento no Firestore.
      */
     if (typeof dispositivoId === 'string' && /^[0-9a-f]{20}$/.test(dispositivoId)) {
-      dados[`saudeTokens.${dispositivoId}.ultimoRecebimentoEm`] = agora;
-      dados[`saudeTokens.${dispositivoId}.enviosSemConfirmacao`] = 0;
+      await colecaoDispositivos(uid).doc(dispositivoId).update({
+        ultimoRecebimentoEm: agora,
+        enviosSemConfirmacao: 0,
+      });
     }
 
-    await docUsuario.update(dados);
     response.status(204).send();
   } catch (falha) {
     console.error('[confirmarRecebimentoPush] falha', uid, falha);

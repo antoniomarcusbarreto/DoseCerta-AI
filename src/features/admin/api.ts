@@ -83,3 +83,23 @@ export async function adminRessincronizarNotificacoes(): Promise<{
   const resposta = await chamar();
   return resposta.data;
 }
+
+export type ResumoMigracaoDispositivos = {
+  totalUsuarios: number;
+  usuariosMigrados: number;
+  dispositivosCriados: number;
+  usuariosSemToken: number;
+  arraysAntigosApagados: number;
+  falhas: { uid: string; erro: string }[];
+};
+
+export async function adminMigrarDispositivos(
+  apagarArraysAntigos: boolean,
+): Promise<ResumoMigracaoDispositivos> {
+  const chamar = httpsCallable<{ apagarArraysAntigos: boolean }, ResumoMigracaoDispositivos>(
+    getFunctionsCliente(),
+    'adminMigrarDispositivos',
+  );
+  const resposta = await chamar({ apagarArraysAntigos });
+  return resposta.data;
+}

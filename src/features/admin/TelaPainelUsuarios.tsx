@@ -7,6 +7,7 @@ import {
   adminDefinirBloqueio,
   adminDefinirGratuidade,
   adminListarUsuarios,
+  adminMigrarDispositivos,
   adminRessincronizarNotificacoes,
   type UsuarioPainel,
 } from './api';
@@ -149,6 +150,10 @@ export function TelaPainelUsuarios() {
   const [ressincronizando, setRessincronizando] = useState(false);
   const [resultadoRessincronizacao, setResultadoRessincronizacao] = useState<string | null>(null);
 
+  const [migrando, setMigrando] = useState(false);
+  const [migracaoConcluida, setMigracaoConcluida] = useState(false);
+  const [resultadoMigracao, setResultadoMigracao] = useState<string | null>(null);
+
   async function recarregar() {
     setErro(null);
     setCarregando(true);
@@ -191,10 +196,10 @@ export function TelaPainelUsuarios() {
   }
 
   /*
-   * Ação manual, não um botão de rotina: recalcula `notificacoesAtivas` em
-   * TODA a base a partir do `fcmTokens` atual de cada usuário. Necessária uma
-   * vez para popular a flag nos usuários que existiam antes dela, e útil
-   * depois se a flag algum dia divergir por edição manual no Firestore.
+   * Ação manual, não um botão de rotina: recalcula `notificacoesAtivas` e
+   * `totalDispositivosAtivos` em TODA a base a partir da subcoleção
+   * `dispositivos` de cada usuário. Útil se os campos agregados algum dia
+   * divergirem por edição manual no Firestore.
    */
   async function ressincronizarNotificacoes() {
     setRessincronizando(true);
@@ -213,10 +218,72 @@ export function TelaPainelUsuarios() {
     }
   }
 
+  /*
+   * Migração única do modelo antigo (`fcmTokens` array) para a subcoleção
+   * `dispositivos`. Roda sem apagar os arrays antigos — só depois de validar
+   * o modelo novo (contagens no painel batendo, um envio de teste chegando)
+   * é que faz sentido chamar `apagarArraysAntigos`.
+   */
+  async function migrarDispositivos() {
+    setMigrando(true);
+    setResultadoMigracao(null);
+    setErro(null);
+    try {
+      const resumo = await adminMigrarDispositivos(false);
+      setResultadoMigracao(
+        `${resumo.usuariosMigrados} conta(s) migrada(s), ${resumo.dispositivosCriados} dispositivo(s) criado(s), ` +
+          `${resumo.usuariosSemToken} sem token, ${resumo.falhas.length} falha(s).`,
+      );
+      setMigracaoConcluida(resumo.falhas.length === 0 && resumo.usuariosMigrados > 0);
+      await recarregar();
+    } catch {
+      setErro('Não foi possível migrar os dispositivos.');
+    } finally {
+      setMigrando(false);
+    }
+  }
+
+  async function apagarArraysAntigos() {
+    if (!window.confirm('Isso apaga fcmTokens/saudeTokens de todos os usuários já migrados. Confirmar?')) {
+      return;
+    }
+    setMigrando(true);
+    setErro(null);
+    try {
+      const resumo = await adminMigrarDispositivos(true);
+      setResultadoMigracao(`Arrays antigos apagados de ${resumo.arraysAntigosApagados} conta(s).`);
+      setMigracaoConcluida(false);
+    } catch {
+      setErro('Não foi possível apagar os arrays antigos.');
+    } finally {
+      setMigrando(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="t-title text-ink">Usuários</h1>
+        <button
+          type="button"
+          onClick={() => void migrarDispositivos()}
+          disabled={migrando}
+          className="t-label rounded-full border px-3 py-1.5 text-ink-muted disabled:opacity-50"
+          style={{ borderColor: 'var(--border-hair)' }}
+        >
+          {migrando ? 'Migrando…' : 'Migrar para subcoleção de dispositivos'}
+        </button>
+        {migracaoConcluida ? (
+          <button
+            type="button"
+            onClick={() => void apagarArraysAntigos()}
+            disabled={migrando}
+            className="t-label rounded-full border px-3 py-1.5 text-ink-muted disabled:opacity-50"
+            style={{ borderColor: 'var(--border-hair)' }}
+          >
+            Apagar arrays antigos
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => void ressincronizarNotificacoes()}
@@ -237,6 +304,7 @@ export function TelaPainelUsuarios() {
       </div>
 
       {erro ? <Alerta tom="danger" titulo={erro} /> : null}
+      {resultadoMigracao ? <Alerta tom="ok" titulo={resultadoMigracao} /> : null}
       {resultadoRessincronizacao ? <Alerta tom="ok" titulo={resultadoRessincronizacao} /> : null}
 
       <SheetCard>

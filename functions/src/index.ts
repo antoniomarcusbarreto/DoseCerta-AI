@@ -32,6 +32,7 @@ export {
   adminMetricas,
   adminEnviarBroadcast,
   adminRessincronizarNotificacoes,
+  adminMigrarDispositivos,
 } from './admin.js';
 export {
   webauthnIniciarRegistro,

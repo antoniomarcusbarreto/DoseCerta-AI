@@ -1,11 +1,11 @@
 import {
-  arrayRemove,
-  arrayUnion,
   collection,
+  deleteDoc,
   doc,
   getDocFromServer,
-  setDoc,
+  serverTimestamp,
   Timestamp,
+  writeBatch,
   type CollectionReference,
   type DocumentData,
   type DocumentReference,
@@ -13,6 +13,7 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
+import { detectarAndroid, detectarIOS } from '@/features/auth/sessao';
 import type {
   Agenda,
   Aplicacao,
@@ -450,39 +451,78 @@ export const refUsuario = (uid: string) =>
   doc(getDb(), 'users', uid).withConverter(conversorCampoUsuario);
 
 /**
- * Adiciona o token FCM do dispositivo atual ao array `fcmTokens` do doc raiz
- * do usuário. `arrayUnion` evita duplicar o mesmo token a cada
- * `getToken()` (o SDK costuma devolver o mesmo token enquanto ele for válido).
- *
- * `notificacoesAtivas` é o booleano que as rotinas agendadas consultam para
- * não varrer a coleção `users` inteira a cada execução — ver
- * `usuariosComNotificacoes` em `functions/src/notificacoes.ts`. Só é escrito
- * como `true` aqui: adicionar um token sempre deixa o array não-vazio, então
- * não há caso em que isso mentiria. O caminho inverso (zerar quando o último
- * token sai) é responsabilidade do servidor, que já sabe o estado final do
- * array depois de podar tokens mortos.
+ * Mesmo hash usado no servidor (`idDoToken` em `functions/src/notificacoes.ts`)
+ * para nomear o documento do dispositivo — `sha256(token).slice(0,20)`. Aqui
+ * via Web Crypto (`node:crypto` não existe no browser), mas o resultado é
+ * byte a byte o mesmo hash, então cliente e servidor sempre concordam sobre
+ * qual documento pertence a qual token.
  */
-export const salvarTokenFcm = (uid: string, token: string) =>
-  setDoc(docUsuario(uid), { fcmTokens: arrayUnion(token), notificacoesAtivas: true }, { merge: true });
-
-/**
- * Confirma no SERVIDOR (não no cache local) que o token está em
- * `fcmTokens`. O Firestore roda com persistência offline (`persistentLocalCache`
- * em `src/lib/firebase.ts`), então `setDoc`/`salvarTokenFcm` resolve assim
- * que a escrita entra no cache local — não quando o servidor confirma. Sem
- * esse round-trip explícito, a UI pode marcar "habilitado" com o token só
- * na memória do dispositivo, enquanto a Cloud Function (que só enxerga o
- * servidor via Admin SDK) não encontra token nenhum.
- */
-export async function confirmarTokenFcmSalvo(uid: string, token: string): Promise<boolean> {
-  const snap = await getDocFromServer(docUsuario(uid));
-  const tokens = snap.data()?.fcmTokens;
-  return Array.isArray(tokens) && tokens.includes(token);
+async function idDoTokenCliente(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(0, 20);
 }
 
-/** Remove um token específico de `fcmTokens` — usado no "Reset de Notificações". */
-export const removerTokenFcm = (uid: string, token: string) =>
-  setDoc(docUsuario(uid), { fcmTokens: arrayRemove(token) }, { merge: true });
+function plataformaAtual(): 'ios' | 'android' | 'web' {
+  if (detectarIOS()) return 'ios';
+  if (detectarAndroid()) return 'android';
+  return 'web';
+}
+
+const docDispositivo = (uid: string, dispositivoId: string) =>
+  doc(getDb(), 'users', uid, 'dispositivos', dispositivoId);
+
+/**
+ * Registra o token FCM do dispositivo atual em
+ * `users/{uid}/dispositivos/{dispositivoId}` e garante `notificacoesAtivas`
+ * no doc raiz — as duas escritas saem no mesmo `writeBatch`, atômicas entre
+ * si, para nunca deixar um dispositivo ativo sem a flag que a query indexada
+ * de `usuariosComNotificacoes` (servidor) depende para encontrá-lo.
+ *
+ * `set({...}, {merge:true})` no id determinístico evita duplicar o mesmo
+ * dispositivo a cada `getToken()` (o SDK costuma devolver o mesmo token
+ * enquanto ele for válido) — reexecutar isto é sempre seguro.
+ */
+export async function salvarTokenFcm(uid: string, token: string): Promise<void> {
+  const dispositivoId = await idDoTokenCliente(token);
+  const lote = writeBatch(getDb());
+  lote.set(
+    docDispositivo(uid, dispositivoId),
+    {
+      token,
+      status: 'ativo',
+      plataforma: plataformaAtual(),
+      criadoEm: serverTimestamp(),
+    },
+    { merge: true },
+  );
+  lote.set(docUsuario(uid), { notificacoesAtivas: true }, { merge: true });
+  await lote.commit();
+}
+
+/**
+ * Confirma no SERVIDOR (não no cache local) que o dispositivo foi salvo com
+ * status ativo. O Firestore roda com persistência offline
+ * (`persistentLocalCache` em `src/lib/firebase.ts`), então `salvarTokenFcm`
+ * resolve assim que a escrita entra no cache local — não quando o servidor
+ * confirma. Sem esse round-trip explícito, a UI pode marcar "habilitado" com
+ * o token só na memória do dispositivo, enquanto a Cloud Function (que só
+ * enxerga o servidor via Admin SDK) não encontra dispositivo nenhum.
+ */
+export async function confirmarTokenFcmSalvo(uid: string, token: string): Promise<boolean> {
+  const dispositivoId = await idDoTokenCliente(token);
+  const snap = await getDocFromServer(docDispositivo(uid, dispositivoId));
+  return snap.exists() && snap.data()?.status === 'ativo';
+}
+
+/** Remove o documento do dispositivo atual — usado no "Reset de Notificações". */
+export async function removerTokenFcm(uid: string, token: string): Promise<void> {
+  const dispositivoId = await idDoTokenCliente(token);
+  await deleteDoc(docDispositivo(uid, dispositivoId));
+}
 
 export const refPerfil = (uid: string) =>
   doc(getDb(), 'users', uid, 'meta', 'perfil').withConverter(conversorPerfil);

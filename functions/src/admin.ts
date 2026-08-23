@@ -1,9 +1,9 @@
 import { createHash, randomInt } from 'node:crypto';
 import { getAuth } from 'firebase-admin/auth';
-import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
-import { enviarParaUsuario, usuariosComNotificacoes } from './notificacoes.js';
+import { enviarParaUsuario, idDoToken, usuariosComNotificacoes } from './notificacoes.js';
 
 const REGIAO = 'southamerica-east1';
 const REMETENTE = 'Dose Certa-AI <suporte@notificacoes.codehatch.com.br>';
@@ -279,7 +279,6 @@ export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async 
     .map((usuario) => {
       const perfil = perfisPorUid.get(usuario.uid);
       const freeTrialEndsAt = perfil?.freeTrialEndsAt as Timestamp | undefined;
-      const tokens = perfil?.fcmTokens;
       const enviadoEm = perfil?.ultimoPushEnviadoEm;
       const recebidoEm = perfil?.ultimoPushRecebidoEm;
       return {
@@ -289,7 +288,7 @@ export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async 
         disabled: usuario.disabled,
         criadoEm: usuario.metadata.creationTime,
         freeTrialEndsAt: freeTrialEndsAt ? freeTrialEndsAt.toDate().toISOString() : null,
-        tokens: Array.isArray(tokens) ? tokens.length : 0,
+        tokens: Number(perfil?.totalDispositivosAtivos ?? 0),
         ultimoPushEnviadoEm:
           enviadoEm instanceof Timestamp ? enviadoEm.toDate().toISOString() : null,
         ultimoPushRecebidoEm:
@@ -418,31 +417,42 @@ export const adminEnviarBroadcast = onCall({ region: REGIAO, cors: true }, async
 });
 
 /**
- * Ferramenta de manutenção: recalcula `notificacoesAtivas` em TODOS os
- * usuários a partir do `fcmTokens` atual de cada um.
+ * Ferramenta de manutenção: recalcula `notificacoesAtivas` e
+ * `totalDispositivosAtivos` em TODOS os usuários a partir da subcoleção
+ * `dispositivos` de cada um.
  *
- * É o único lugar do sistema que ainda faz `collection('users').get()` sem
- * filtro — de propósito, e só aqui: é acionado manualmente pelo admin, não
- * roda em cron. Necessário na primeira ativação da flag (nenhum documento
- * existente a tem ainda) e útil depois se ela algum dia divergir por edição
- * manual no console do Firestore.
+ * É o único lugar do sistema que faz `collectionGroup('dispositivos')` sem
+ * filtro por usuário — de propósito, e só aqui: é acionado manualmente pelo
+ * admin, não roda em cron. Útil se os campos agregados algum dia divergirem
+ * da subcoleção por edição manual no console do Firestore.
  */
 export const adminRessincronizarNotificacoes = onCall({ region: REGIAO, cors: true }, async (request) => {
   exigirAdmin(request);
 
   const db = getFirestore();
-  const todos = await db.collection('users').get();
+  const [todos, dispositivosAtivos] = await Promise.all([
+    db.collection('users').get(),
+    db.collectionGroup('dispositivos').where('status', '==', 'ativo').get(),
+  ]);
+
+  const ativosPorUid = new Map<string, number>();
+  for (const doc of dispositivosAtivos.docs) {
+    // Caminho é users/{uid}/dispositivos/{id} — o penúltimo segmento é o uid.
+    const partes = doc.ref.path.split('/');
+    const uid = partes[partes.length - 3];
+    ativosPorUid.set(uid, (ativosPorUid.get(uid) ?? 0) + 1);
+  }
 
   let atualizados = 0;
   let lote = db.batch();
   let operacoesNoLote = 0;
 
   for (const doc of todos.docs) {
-    const tokens = doc.data().fcmTokens;
-    const ativo = Array.isArray(tokens) && tokens.length > 0;
-    if (doc.data().notificacoesAtivas === ativo) continue;
+    const total = ativosPorUid.get(doc.id) ?? 0;
+    const ativo = total > 0;
+    if (doc.data().notificacoesAtivas === ativo && doc.data().totalDispositivosAtivos === total) continue;
 
-    lote.update(doc.ref, { notificacoesAtivas: ativo });
+    lote.update(doc.ref, { notificacoesAtivas: ativo, totalDispositivosAtivos: total });
     atualizados += 1;
     operacoesNoLote += 1;
 
@@ -459,4 +469,115 @@ export const adminRessincronizarNotificacoes = onCall({ region: REGIAO, cors: tr
   }
 
   return { totalUsuarios: todos.size, atualizados };
+});
+
+type ResumoMigracaoDispositivos = {
+  totalUsuarios: number;
+  usuariosMigrados: number;
+  dispositivosCriados: number;
+  usuariosSemToken: number;
+  arraysAntigosApagados: number;
+  falhas: { uid: string; erro: string }[];
+};
+
+/**
+ * Migra o modelo antigo (`fcmTokens` array + mapa `saudeTokens` no doc do
+ * usuário) para a subcoleção `users/{uid}/dispositivos/{dispositivoId}`.
+ *
+ * À prova da falha que causou o apagão das 15:00: naquele caso, um backfill
+ * anterior deixou `notificacoesAtivas` sem gravar em usuários existentes, e a
+ * query indexada de `usuariosComNotificacoes` — corretamente — não os
+ * enxergou. Aqui, os documentos de dispositivo e os campos agregados no doc
+ * raiz (`notificacoesAtivas`, `totalDispositivosAtivos`) saem no MESMO
+ * `batch` por usuário: nunca ficam dessincronizados entre si, mesmo se a
+ * function inteira cair no meio da varredura.
+ *
+ * Todo write é `set`/`merge` com IDs determinísticos (o mesmo hash de token
+ * já usado em produção) — reexecutar este script é seguro mesmo depois de
+ * uma falha parcial: usuários já migrados são simplesmente reescritos com os
+ * mesmos valores.
+ *
+ * `apagarArraysAntigos` fica de fora por padrão de propósito: só depois de
+ * validar o modelo novo (painel mostrando as contagens certas, um envio de
+ * teste chegando) é que faz sentido rodar de novo com a flag para limpar
+ * `fcmTokens`/`saudeTokens`.
+ */
+export const adminMigrarDispositivos = onCall({ region: REGIAO, cors: true }, async (request) => {
+  exigirAdmin(request);
+
+  const { apagarArraysAntigos } = (request.data ?? {}) as { apagarArraysAntigos?: boolean };
+
+  const db = getFirestore();
+  const todos = await db.collection('users').get();
+
+  const resumo: ResumoMigracaoDispositivos = {
+    totalUsuarios: todos.size,
+    usuariosMigrados: 0,
+    dispositivosCriados: 0,
+    usuariosSemToken: 0,
+    arraysAntigosApagados: 0,
+    falhas: [],
+  };
+
+  for (const doc of todos.docs) {
+    try {
+      const dados = doc.data();
+      const tokens = Array.isArray(dados.fcmTokens) ? (dados.fcmTokens as string[]) : [];
+      const saudeTokens = (dados.saudeTokens ?? {}) as Record<
+        string,
+        { ultimoEnvioEm?: unknown; ultimoRecebimentoEm?: unknown; enviosSemConfirmacao?: number }
+      >;
+
+      const lote = db.batch();
+
+      if (tokens.length === 0) {
+        if (dados.notificacoesAtivas !== false || dados.totalDispositivosAtivos !== 0) {
+          lote.update(doc.ref, { notificacoesAtivas: false, totalDispositivosAtivos: 0 });
+          await lote.commit();
+        }
+        resumo.usuariosSemToken += 1;
+        continue;
+      }
+
+      for (const token of tokens) {
+        const id = idDoToken(token);
+        const saude = saudeTokens[id] ?? {};
+        lote.set(
+          doc.ref.collection('dispositivos').doc(id),
+          {
+            token,
+            status: 'ativo',
+            plataforma: 'desconhecida',
+            criadoEm: FieldValue.serverTimestamp(),
+            ultimoEnvioEm: saude.ultimoEnvioEm ?? null,
+            ultimoRecebimentoEm: saude.ultimoRecebimentoEm ?? null,
+            enviosSemConfirmacao: saude.enviosSemConfirmacao ?? 0,
+          },
+          { merge: true },
+        );
+        resumo.dispositivosCriados += 1;
+      }
+
+      // Atômico com os documentos de dispositivo acima: a flag nunca fica
+      // gravada sem os dispositivos que a sustentam, nem o contrário.
+      lote.update(doc.ref, { notificacoesAtivas: true, totalDispositivosAtivos: tokens.length });
+
+      if (apagarArraysAntigos) {
+        lote.update(doc.ref, {
+          fcmTokens: FieldValue.delete(),
+          saudeTokens: FieldValue.delete(),
+        });
+        resumo.arraysAntigosApagados += 1;
+      }
+
+      await lote.commit();
+      resumo.usuariosMigrados += 1;
+    } catch (falha) {
+      console.error('[adminMigrarDispositivos] falha ao migrar usuário', doc.id, falha);
+      const detalhe = falha instanceof Error ? falha.message : String(falha);
+      resumo.falhas.push({ uid: doc.id, erro: detalhe });
+    }
+  }
+
+  return resumo;
 });
