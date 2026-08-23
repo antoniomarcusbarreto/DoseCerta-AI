@@ -1,11 +1,11 @@
 import {
   collection,
-  deleteDoc,
   doc,
   getDocFromServer,
+  increment,
+  runTransaction,
   serverTimestamp,
   Timestamp,
-  writeBatch,
   type CollectionReference,
   type DocumentData,
   type DocumentReference,
@@ -477,30 +477,50 @@ const docDispositivo = (uid: string, dispositivoId: string) =>
 
 /**
  * Registra o token FCM do dispositivo atual em
- * `users/{uid}/dispositivos/{dispositivoId}` e garante `notificacoesAtivas`
- * no doc raiz — as duas escritas saem no mesmo `writeBatch`, atômicas entre
- * si, para nunca deixar um dispositivo ativo sem a flag que a query indexada
- * de `usuariosComNotificacoes` (servidor) depende para encontrá-lo.
+ * `users/{uid}/dispositivos/{dispositivoId}` e mantém `notificacoesAtivas` /
+ * `totalDispositivosAtivos` no doc raiz — os dois são o que a query indexada
+ * de `usuariosComNotificacoes` (servidor) usa para encontrar candidatos, e
+ * ambos precisam sair certos daqui: se `totalDispositivosAtivos` ficasse
+ * atrasado, o usuário nunca entraria na varredura das rotinas agendadas — e
+ * como só `enviarParaUsuario` corrige esse campo, e ele só roda para quem já
+ * é candidato, o usuário ficaria excluído para sempre.
  *
+ * Por isso é uma `transaction`, não um `writeBatch`: precisa LER se o
+ * dispositivo já estava ativo antes de decidir se incrementa o contador.
  * `set({...}, {merge:true})` no id determinístico evita duplicar o mesmo
  * dispositivo a cada `getToken()` (o SDK costuma devolver o mesmo token
- * enquanto ele for válido) — reexecutar isto é sempre seguro.
+ * enquanto ele for válido); sem essa checagem, cada recheck automático do
+ * app (mount, `visibilitychange`) incrementaria o contador de novo,
+ * mentindo sobre quantos dispositivos a conta realmente tem.
  */
 export async function salvarTokenFcm(uid: string, token: string): Promise<void> {
   const dispositivoId = await idDoTokenCliente(token);
-  const lote = writeBatch(getDb());
-  lote.set(
-    docDispositivo(uid, dispositivoId),
-    {
-      token,
-      status: 'ativo',
-      plataforma: plataformaAtual(),
-      criadoEm: serverTimestamp(),
-    },
-    { merge: true },
-  );
-  lote.set(docUsuario(uid), { notificacoesAtivas: true }, { merge: true });
-  await lote.commit();
+  const refDispositivo = docDispositivo(uid, dispositivoId);
+
+  await runTransaction(getDb(), async (tx) => {
+    const snap = await tx.get(refDispositivo);
+    const jaEstavaAtivo = snap.exists() && snap.data()?.status === 'ativo';
+
+    tx.set(
+      refDispositivo,
+      {
+        token,
+        status: 'ativo',
+        plataforma: plataformaAtual(),
+        criadoEm: serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    tx.set(
+      docUsuario(uid),
+      {
+        notificacoesAtivas: true,
+        ...(jaEstavaAtivo ? {} : { totalDispositivosAtivos: increment(1) }),
+      },
+      { merge: true },
+    );
+  });
 }
 
 /**
@@ -518,10 +538,28 @@ export async function confirmarTokenFcmSalvo(uid: string, token: string): Promis
   return snap.exists() && snap.data()?.status === 'ativo';
 }
 
-/** Remove o documento do dispositivo atual — usado no "Reset de Notificações". */
+/**
+ * Remove o documento do dispositivo atual — usado no "Reset de Notificações".
+ * Decrementa `totalDispositivosAtivos` só se o dispositivo removido de fato
+ * estava ativo, pela mesma razão da transação em `salvarTokenFcm`: esse
+ * contador precisa continuar batendo com a realidade da subcoleção, senão
+ * a conta pode ficar presa fora da varredura das rotinas (contador não pode
+ * ficar negativo) ou continuar sendo contada com um dispositivo a mais.
+ */
 export async function removerTokenFcm(uid: string, token: string): Promise<void> {
   const dispositivoId = await idDoTokenCliente(token);
-  await deleteDoc(docDispositivo(uid, dispositivoId));
+  const refDispositivo = docDispositivo(uid, dispositivoId);
+
+  await runTransaction(getDb(), async (tx) => {
+    const snap = await tx.get(refDispositivo);
+    if (!snap.exists()) return;
+    const eraAtivo = snap.data()?.status === 'ativo';
+
+    tx.delete(refDispositivo);
+    if (eraAtivo) {
+      tx.set(docUsuario(uid), { totalDispositivosAtivos: increment(-1) }, { merge: true });
+    }
+  });
 }
 
 export const refPerfil = (uid: string) =>
