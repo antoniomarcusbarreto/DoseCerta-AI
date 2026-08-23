@@ -3,7 +3,7 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
-import { enviarParaUsuario } from './notificacoes.js';
+import { enviarParaUsuario, usuariosComNotificacoes } from './notificacoes.js';
 
 const REGIAO = 'southamerica-east1';
 const REMETENTE = 'Dose Certa-AI <suporte@notificacoes.codehatch.com.br>';
@@ -400,13 +400,19 @@ export const adminEnviarBroadcast = onCall({ region: REGIAO, cors: true }, async
     throw new HttpsError('invalid-argument', 'titulo e corpo são obrigatórios.');
   }
 
-  const db = getFirestore();
-  const usuarios = await db.collection('users').where('fcmTokens', '!=', []).get();
+  /*
+   * Mesma varredura das rotinas agendadas, em vez de `where('fcmTokens', '!=', [])`.
+   * A desigualdade sobre array é frágil no Firestore e pode simplesmente não
+   * casar documento nenhum — num broadcast isso significa "enviado para
+   * ninguém" sem erro nenhum na tela. O filtro em memória é o mesmo critério
+   * que decide quem recebe lembrete, então os dois caminhos não divergem.
+   */
+  const { comToken } = await usuariosComNotificacoes();
 
   let enviados = 0;
-  for (const usuario of usuarios.docs) {
+  for (const usuario of comToken) {
     enviados += await enviarParaUsuario(usuario.id, titulo, corpo);
   }
 
-  return { enviados, totalUsuarios: usuarios.size };
+  return { enviados, totalUsuarios: comToken.length };
 });

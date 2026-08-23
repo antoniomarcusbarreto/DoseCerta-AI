@@ -27,7 +27,14 @@ function extrairNotificacao(evento) {
     dados = evento.data.json();
   } catch (erro) {
     // Payload que não é JSON: ainda melhor mostrar como texto do que engolir.
-    return { titulo: TITULO_PADRAO, corpo: evento.data.text(), link: '/', uid: null, enviadoEm: null };
+    return {
+      titulo: TITULO_PADRAO,
+      corpo: evento.data.text(),
+      link: '/',
+      uid: null,
+      enviadoEm: null,
+      dispositivoId: null,
+    };
   }
 
   const notificacao = dados.notification ?? {};
@@ -39,6 +46,7 @@ function extrairNotificacao(evento) {
     link: extras.link ?? notificacao.click_action ?? '/',
     uid: extras.uid ?? null,
     enviadoEm: extras.enviadoEm ?? null,
+    dispositivoId: extras.dispositivoId ?? null,
   };
 }
 
@@ -49,13 +57,13 @@ function extrairNotificacao(evento) {
  * Foco, Baixo Consumo). Nunca deve impedir `showNotification` — por isso o
  * `catch` engole qualquer falha de rede/CORS em silêncio.
  */
-function confirmarRecebimento(uid, enviadoEm) {
+function confirmarRecebimento(uid, enviadoEm, dispositivoId) {
   if (!uid) return Promise.resolve();
   return fetch(URL_CONFIRMACAO, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     keepalive: true,
-    body: JSON.stringify({ uid, enviadoEm }),
+    body: JSON.stringify({ uid, enviadoEm, dispositivoId }),
   }).catch(() => {});
 }
 
@@ -80,7 +88,7 @@ self.addEventListener('push', (evento) => {
         // anterior na bandeja.
         data: { link: conteudo.link },
       }),
-      confirmarRecebimento(conteudo.uid, conteudo.enviadoEm),
+      confirmarRecebimento(conteudo.uid, conteudo.enviadoEm, conteudo.dispositivoId),
     ]),
   );
 });

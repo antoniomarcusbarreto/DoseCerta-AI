@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import {
+  FieldValue,
   getFirestore,
   Timestamp,
   type DocumentSnapshot,
@@ -11,10 +13,60 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 const REGIAO = 'southamerica-east1';
 const FUSO = 'America/Sao_Paulo';
 
+/*
+ * Quantos envios seguidos sem nenhuma confirmação do aparelho antes de
+ * considerar um token fantasma. Com ~6 rotinas por dia, 15 envios são uns
+ * 2 a 3 dias de silêncio total — folga suficiente para um celular
+ * desligado ou em Foco não ser descartado à toa.
+ */
+const ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE = 15;
+
+/*
+ * Teto de dispositivos por conta. Ninguém usa o app em cinco aparelhos ao
+ * mesmo tempo; passar disso significa registros obsoletos acumulando.
+ */
+const MAX_DISPOSITIVOS = 5;
+
+type SaudeToken = {
+  enviosSemConfirmacao?: number;
+  ultimoEnvioEm?: unknown;
+  ultimoRecebimentoEm?: unknown;
+};
+
 /**
- * Envia uma notificação para todos os tokens FCM salvos em `users/{uid}` e
- * remove da lista os tokens que o FCM reporta como mortos (desinstalado,
- * permissão revogada, etc.) — sem isso `fcmTokens` só cresce para sempre.
+ * Identificador curto e estável de um token, derivado dele mesmo.
+ *
+ * O token em si nunca vai para log nem trafega de volta do aparelho: é
+ * credencial de envio. O hash permite o Service Worker dizer "fui eu que
+ * recebi" sem expor nada, e dá sempre a mesma chave para o mesmo token.
+ * Só hex, então serve como caminho de campo do Firestore sem escape.
+ */
+function idDoToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex').slice(0, 20);
+}
+
+/**
+ * Envia uma notificação para os dispositivos registrados em `users/{uid}` e
+ * poda o que não serve mais.
+ *
+ * São três causas distintas de lixo, e cada uma exige um critério próprio:
+ *
+ * 1. Token que o FCM declara morto (app desinstalado, permissão revogada).
+ *    Fácil: o próprio FCM avisa no retorno do envio.
+ * 2. Token *fantasma* — o FCM ainda aceita, mas nenhum Service Worker acorda
+ *    do outro lado. Nasce de PWA reinstalado ou de contextos separados no
+ *    iOS (Safari vs. app na Tela de Início). Este é o perigoso: como o envio
+ *    "dá certo", `successCount` sobe, a rotina contabiliza sucesso e o log
+ *    fica limpo enquanto ninguém vê notificação nenhuma. Só dá para
+ *    identificá-lo pela ausência de confirmação de recebimento.
+ * 3. Acúmulo puro e simples, contido pelo teto de `MAX_DISPOSITIVOS`.
+ *
+ * A poda de fantasma exige um irmão saudável na mesma conta, de propósito:
+ * a confirmação depende de um `fetch` best-effort dentro do Service Worker,
+ * que pode falhar por rede sem que a notificação tenha falhado. Sem essa
+ * trava, um aparelho que exibe tudo corretamente mas nunca consegue
+ * confirmar acabaria descadastrado — trocaríamos um bug silencioso por
+ * outro pior.
  */
 export async function enviarParaUsuario(uid: string, titulo: string, corpo: string): Promise<number> {
   const db = getFirestore();
@@ -26,32 +78,27 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
     return 0;
   }
 
+  const saude = (snap.data()?.saudeTokens ?? {}) as Record<string, SaudeToken>;
   const enviadoEm = Date.now();
 
-  const resposta = await getMessaging().sendEachForMulticast({
-    tokens,
+  /*
+   * `sendEach` em vez de `sendEachForMulticast`: o multicast manda o MESMO
+   * payload para todos os tokens, então não havia como cada aparelho saber
+   * qual registro ele é ao confirmar o recebimento. Com uma mensagem por
+   * token, cada uma leva o seu `dispositivoId`. O custo é o mesmo: o
+   * multicast também despacha individualmente por baixo.
+   */
+  const mensagens = tokens.map((token) => ({
+    token,
     /*
      * `notification` no topo é obrigatório: sem ele o iOS trata a mensagem
      * como data-only e não exibe banner nenhum com o app fechado.
-     * O bloco `webpush` é o que o Web Push realmente consome — repete
-     * título/corpo (o topo sozinho não carrega ícone) e leva o `link` que o
-     * service worker usa ao tocar na notificação. `Urgency: high` evita que
-     * o push fique represado enquanto o dispositivo está ocioso.
      */
     notification: { title: titulo, body: corpo },
-    /*
-     * `data` viaja junto com o payload até o Service Worker (evento `push`
-     * cru, sem SDK). É o que permite ao SW confirmar de volta pro servidor
-     * "eu acordei e recebi isto" — sem isso não dá pra distinguir "o iOS
-     * nunca entregou o push" de "o app tem um bug em showNotification".
-     */
-    data: { uid, enviadoEm: String(enviadoEm) },
+    data: { uid, dispositivoId: idDoToken(token), enviadoEm: String(enviadoEm) },
     /*
      * Bloco `apns` explícito: o iOS descarta o push silenciosamente com o
-     * app em force-close se a prioridade/tipo não vierem declarados aqui,
-     * mesmo em cenário de Web Push. `content-available`/`mutable-content`
-     * (via `contentAvailable`/`mutableContent`) acordam o app em segundo
-     * plano além de exibir o alerta.
+     * app em force-close se a prioridade/tipo não vierem declarados aqui.
      */
     apns: {
       headers: {
@@ -76,28 +123,86 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
       },
       fcmOptions: { link: '/' },
     },
+  }));
+
+  const resposta = await getMessaging().sendEach(mensagens);
+
+  // (1) mortos declarados pelo próprio FCM
+  const descartar = new Set<string>();
+  resposta.responses.forEach((r, i) => {
+    if (!r.success && ehTokenInvalido(r.error?.code)) descartar.add(tokens[i]);
   });
 
-  const tokensInvalidos = resposta.responses
-    .map((r, i) => (!r.success && ehTokenInvalido(r.error?.code) ? tokens[i] : null))
-    .filter((t): t is string => t !== null);
+  // (2) fantasmas — só quando há outro token da conta que já confirmou
+  const existeSaudavel = tokens.some(
+    (t) => !descartar.has(t) && saude[idDoToken(t)]?.ultimoRecebimentoEm,
+  );
+  if (existeSaudavel) {
+    for (const token of tokens) {
+      if (descartar.has(token)) continue;
+      const s = saude[idDoToken(token)];
+      const nuncaConfirmou = !s?.ultimoRecebimentoEm;
+      const semConfirmacao = s?.enviosSemConfirmacao ?? 0;
+      if (nuncaConfirmou && semConfirmacao >= ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE) {
+        descartar.add(token);
+      }
+    }
+  }
+
+  // (3) teto: mantém os que confirmaram mais recentemente
+  let restantes = tokens.filter((t) => !descartar.has(t));
+  if (restantes.length > MAX_DISPOSITIVOS) {
+    const quando = (t: string) => {
+      const valor = saude[idDoToken(t)]?.ultimoRecebimentoEm;
+      return valor instanceof Timestamp ? valor.toMillis() : 0;
+    };
+    const ordenados = [...restantes].sort((a, b) => quando(b) - quando(a));
+    for (const token of ordenados.slice(MAX_DISPOSITIVOS)) descartar.add(token);
+    restantes = ordenados.slice(0, MAX_DISPOSITIVOS);
+  }
+
+  const atualizacao: Record<string, unknown> = {};
+
+  if (descartar.size > 0) {
+    atualizacao.fcmTokens = restantes;
+    for (const token of descartar) {
+      atualizacao[`saudeTokens.${idDoToken(token)}`] = FieldValue.delete();
+    }
+  }
 
   /*
-   * O carimbo de envio é gravado AQUI, no servidor, e não quando o aparelho
-   * confirma o recebimento. Enquanto ele dependia do Service Worker chamar de
-   * volta, um push que o dispositivo nunca recebia deixava os dois campos
-   * vazios — e o diagnóstico dizia "enviado: nunca" mesmo tendo enviado, que
-   * é exatamente o caso que a funcionalidade existia para distinguir.
-   * Vai junto da limpeza de tokens inválidos para não gastar duas escritas
-   * no mesmo documento.
+   * O carimbo de envio é gravado no servidor, no momento do envio — nunca
+   * dependendo do aparelho responder. Enquanto ele dependia disso, um push
+   * que o dispositivo nunca recebia deixava os dois campos vazios e o
+   * diagnóstico dizia "enviado: nunca" mesmo tendo enviado com sucesso.
    */
-  const atualizacao: Record<string, unknown> = {};
-  if (tokensInvalidos.length > 0) {
-    atualizacao.fcmTokens = tokens.filter((t) => !tokensInvalidos.includes(t));
-  }
   if (resposta.successCount > 0) {
     atualizacao.ultimoPushEnviadoEm = Timestamp.fromMillis(enviadoEm);
   }
+
+  /*
+   * Contador por dispositivo: sobe a cada envio aceito, e o recebimento
+   * confirmado zera. É ele que denuncia o fantasma.
+   */
+  resposta.responses.forEach((r, i) => {
+    const token = tokens[i];
+    if (!r.success || descartar.has(token)) return;
+    const chave = `saudeTokens.${idDoToken(token)}`;
+    atualizacao[`${chave}.ultimoEnvioEm`] = Timestamp.fromMillis(enviadoEm);
+    atualizacao[`${chave}.enviosSemConfirmacao`] = FieldValue.increment(1);
+  });
+
+  /*
+   * Entradas de saúde sem token correspondente: sobram quando um token sai
+   * por outro caminho que não esta função — o "Reset Total" do app remove do
+   * array direto. Sem varrer isso, o documento do usuário cresce para sempre,
+   * que é justamente o que não pode acontecer quando a base escalar.
+   */
+  const idsVivos = new Set(restantes.map(idDoToken));
+  for (const id of Object.keys(saude)) {
+    if (!idsVivos.has(id)) atualizacao[`saudeTokens.${id}`] = FieldValue.delete();
+  }
+
   if (Object.keys(atualizacao).length > 0) {
     await docUsuario.update(atualizacao);
   }
@@ -109,7 +214,7 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
       uid,
       tokens: tokens.length,
       enviados: resposta.successCount,
-      removidos: tokensInvalidos.length,
+      removidos: descartar.size,
       erros: resposta.responses.filter((r) => !r.success).map((r) => r.error?.code ?? 'desconhecido'),
     }),
   );
@@ -169,7 +274,7 @@ async function registrarExecucao(rotina: string, resumo: Record<string, unknown>
   }
 }
 
-async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
+export async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
   const todos = await getFirestore().collection('users').get();
   return { total: todos.size, comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)) };
 }
@@ -1061,7 +1166,10 @@ export const confirmarRecebimentoPush = onRequest({ region: REGIAO, cors: true }
     return;
   }
 
-  const { uid } = (request.body ?? {}) as { uid?: unknown };
+  const { uid, dispositivoId } = (request.body ?? {}) as {
+    uid?: unknown;
+    dispositivoId?: unknown;
+  };
   if (typeof uid !== 'string' || uid.trim().length === 0) {
     response.status(400).send('uid inválido');
     return;
@@ -1083,7 +1191,22 @@ export const confirmarRecebimentoPush = onRequest({ region: REGIAO, cors: true }
      * a esta rota (que é pública, por não haver sessão dentro do Service
      * Worker) forjar o carimbo que o diagnóstico usa como prova.
      */
-    await docUsuario.update({ ultimoPushRecebidoEm: Timestamp.now() });
+    const agora = Timestamp.now();
+    const dados: Record<string, unknown> = { ultimoPushRecebidoEm: agora };
+
+    /*
+     * Zerar o contador do dispositivo que confirmou é o que mantém a poda
+     * honesta: só quem nunca acorda acumula envios sem confirmação e acaba
+     * descartado. `dispositivoId` é hex de 20 caracteres vindo do payload que
+     * o próprio servidor mandou — validado aqui porque a rota é pública e
+     * vira caminho de campo no Firestore.
+     */
+    if (typeof dispositivoId === 'string' && /^[0-9a-f]{20}$/.test(dispositivoId)) {
+      dados[`saudeTokens.${dispositivoId}.ultimoRecebimentoEm`] = agora;
+      dados[`saudeTokens.${dispositivoId}.enviosSemConfirmacao`] = 0;
+    }
+
+    await docUsuario.update(dados);
     response.status(204).send();
   } catch (falha) {
     console.error('[confirmarRecebimentoPush] falha', uid, falha);
