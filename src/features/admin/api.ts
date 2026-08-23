@@ -8,6 +8,9 @@ export type UsuarioPainel = {
   disabled: boolean;
   criadoEm: string;
   freeTrialEndsAt: string | null;
+  tokens: number;
+  ultimoPushEnviadoEm: string | null;
+  ultimoPushRecebidoEm: string | null;
 };
 
 export async function iniciarLoginAdmin(email: string): Promise<void> {

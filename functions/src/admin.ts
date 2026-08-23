@@ -246,6 +246,16 @@ type UsuarioPainel = {
   disabled: boolean;
   criadoEm: string;
   freeTrialEndsAt: string | null;
+  /*
+   * Estado das notificações por usuário. Sem isto, "fulano não recebe
+   * lembretes" só era investigável pedindo que a própria pessoa rodasse o
+   * diagnóstico no aparelho dela — e um usuário sem token nenhum é
+   * silenciosamente ignorado pelas rotinas, que iteram apenas quem tem token.
+   * `tokens: 0` é o suficiente para explicar o sintoma inteiro.
+   */
+  tokens: number;
+  ultimoPushEnviadoEm: string | null;
+  ultimoPushRecebidoEm: string | null;
 };
 
 export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async (request) => {
@@ -269,6 +279,9 @@ export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async 
     .map((usuario) => {
       const perfil = perfisPorUid.get(usuario.uid);
       const freeTrialEndsAt = perfil?.freeTrialEndsAt as Timestamp | undefined;
+      const tokens = perfil?.fcmTokens;
+      const enviadoEm = perfil?.ultimoPushEnviadoEm;
+      const recebidoEm = perfil?.ultimoPushRecebidoEm;
       return {
         uid: usuario.uid,
         email: usuario.email ?? null,
@@ -276,6 +289,11 @@ export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async 
         disabled: usuario.disabled,
         criadoEm: usuario.metadata.creationTime,
         freeTrialEndsAt: freeTrialEndsAt ? freeTrialEndsAt.toDate().toISOString() : null,
+        tokens: Array.isArray(tokens) ? tokens.length : 0,
+        ultimoPushEnviadoEm:
+          enviadoEm instanceof Timestamp ? enviadoEm.toDate().toISOString() : null,
+        ultimoPushRecebidoEm:
+          recebidoEm instanceof Timestamp ? recebidoEm.toDate().toISOString() : null,
       };
     });
 

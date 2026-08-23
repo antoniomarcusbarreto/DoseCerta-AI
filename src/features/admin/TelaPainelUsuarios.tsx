@@ -9,6 +9,15 @@ function formatarData(iso: string | null): string {
   return new Date(iso).toLocaleDateString('pt-BR');
 }
 
+/*
+ * Para "último push" a hora é o que importa: o que se quer saber é se o envio
+ * bateu com o horário da rotina (15:00, 16:00...), não só o dia.
+ */
+function formatarDataHora(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+}
+
 function ModalSenha({ usuario, onFechar, onSalvo }: { usuario: UsuarioPainel; onFechar: () => void; onSalvo: () => void }) {
   const [novaSenha, setNovaSenha] = useState('');
   const [salvando, setSalvando] = useState(false);
@@ -207,6 +216,9 @@ export function TelaPainelUsuarios() {
                     Gratuidade até
                   </th>
                   <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
+                    Notificações
+                  </th>
+                  <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
                     Status
                   </th>
                   <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
@@ -226,6 +238,31 @@ export function TelaPainelUsuarios() {
                     </td>
                     <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
                       {formatarData(usuario.freeTrialEndsAt)}
+                    </td>
+                    <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
+                      {/*
+                        Sem dispositivo registrado a pessoa nunca recebe lembrete: as
+                        rotinas agendadas iteram apenas quem tem token, então ela é
+                        ignorada em silêncio, sem aparecer em nenhum contador de falha.
+                      */}
+                      <span
+                        className="t-label rounded-full px-2.5 py-1"
+                        style={{
+                          background: usuario.tokens > 0 ? 'var(--ok-soft)' : 'var(--danger-soft)',
+                          color: usuario.tokens > 0 ? 'var(--ok)' : 'var(--danger)',
+                        }}
+                      >
+                        {usuario.tokens > 0
+                          ? `${usuario.tokens} dispositivo${usuario.tokens > 1 ? 's' : ''}`
+                          : 'Sem dispositivo'}
+                      </span>
+                      {usuario.tokens > 0 ? (
+                        <p className="t-label mt-1 text-ink-muted">
+                          Enviado: {formatarDataHora(usuario.ultimoPushEnviadoEm)}
+                          <br />
+                          Recebido: {formatarDataHora(usuario.ultimoPushRecebidoEm)}
+                        </p>
+                      ) : null}
                     </td>
                     <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
                       <span
