@@ -251,22 +251,20 @@ function temTokens(valor: unknown): boolean {
   return Array.isArray(valor) && valor.length > 0;
 }
 
-type VarreduraUsuarios = { total: number; comToken: QueryDocumentSnapshot[] };
-
-/**
- * Usuários com pelo menos um token FCM.
- *
- * Varre `users` inteira e filtra em memória, de propósito. A versão anterior
- * usava `where('fcmTokens', '!=', [])`, e inequalidade sobre campo array é
- * terreno instável no Firestore — o índice automático de array indexa os
- * elementos, não o array como valor único, então a query pode não casar com
- * nada sem acusar erro. Como a falha era silenciosa, não dava para distinguir
- * "ninguém tem token" de "a query não enxerga ninguém".
- *
- * Custo: lê a coleção inteira 7×/dia. Irrelevante na escala atual; se a base
- * crescer, o caminho é um booleano derivado (ex. `notificacoesAtivas`) mantido
- * junto com `fcmTokens`, aí a query volta a ser indexável.
+/*
+ * `fonte` diz qual caminho a varredura realmente tomou nesta execução —
+ * distinção que só existia antes como um `console.error`, e a ferramenta de
+ * log deste projeto se mostrou, repetidas vezes nesta base, incapaz de
+ * alcançar de forma confiável os últimos dias. Sem isso, "por que deu
+ * candidatos:0 nessa hora?" só tinha resposta especulativa. Com `fonte` no
+ * registro de execução, a própria tela de diagnóstico responde.
  */
+type VarreduraUsuarios = {
+  total: number;
+  comToken: QueryDocumentSnapshot[];
+  fonte: 'indexada' | 'fallback';
+};
+
 /*
  * Registra que uma rotina agendada rodou, e com que resultado.
  *
@@ -340,12 +338,17 @@ export async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
         'usuário(s) na base — caindo para varredura completa (flag ainda não populada?)',
       );
       const todos = await db.collection('users').get();
-      return { total: todos.size, comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)) };
+      return {
+        total: todos.size,
+        comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)),
+        fonte: 'fallback',
+      };
     }
 
     return {
       total: totalSnap.data().count,
       comToken: comTokenSnap.docs.filter((doc) => temTokens(doc.data().fcmTokens)),
+      fonte: 'indexada',
     };
   } catch (falha) {
     /*
@@ -356,7 +359,11 @@ export async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
      */
     console.error('[usuariosComNotificacoes] query indexada falhou, usando varredura completa', falha);
     const todos = await db.collection('users').get();
-    return { total: todos.size, comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)) };
+    return {
+      total: todos.size,
+      comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)),
+      fonte: 'fallback',
+    };
   }
 }
 
@@ -625,7 +632,7 @@ async function totalHidratacaoHoje(userRef: FirebaseFirestore.DocumentReference)
 export const hidratacaoMetadeDia = onSchedule(
   { schedule: '0 15 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const { total, comToken } = await usuariosComNotificacoes();
+    const { total, comToken, fonte } = await usuariosComNotificacoes();
 
     let elegiveis = 0;
     let notificados = 0;
@@ -654,7 +661,7 @@ export const hidratacaoMetadeDia = onSchedule(
       }
     }
 
-    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas };
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas, fonte };
     console.log('[hidratacaoMetadeDia]', JSON.stringify(resumo));
     await registrarExecucao('hidratacaoMetadeDia', resumo);
   },
@@ -668,7 +675,7 @@ export const hidratacaoMetadeDia = onSchedule(
 export const hidratacaoRetaFinal = onSchedule(
   { schedule: '0 19 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const { total, comToken } = await usuariosComNotificacoes();
+    const { total, comToken, fonte } = await usuariosComNotificacoes();
 
     let elegiveis = 0;
     let notificados = 0;
@@ -698,7 +705,7 @@ export const hidratacaoRetaFinal = onSchedule(
       }
     }
 
-    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas };
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas, fonte };
     console.log('[hidratacaoRetaFinal]', JSON.stringify(resumo));
     await registrarExecucao('hidratacaoRetaFinal', resumo);
   },
@@ -797,7 +804,7 @@ async function consumoNutricaoHoje(
 export const nutricaoAlertaTarde = onSchedule(
   { schedule: '0 16 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const { total, comToken } = await usuariosComNotificacoes();
+    const { total, comToken, fonte } = await usuariosComNotificacoes();
 
     let semMetas = 0;
     let elegiveis = 0;
@@ -834,7 +841,7 @@ export const nutricaoAlertaTarde = onSchedule(
       }
     }
 
-    const resumo = { usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas };
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas, fonte };
     console.log('[nutricaoAlertaTarde]', JSON.stringify(resumo));
     await registrarExecucao('nutricaoAlertaTarde', resumo);
   },
@@ -848,7 +855,7 @@ export const nutricaoAlertaTarde = onSchedule(
 export const nutricaoRetaFinal = onSchedule(
   { schedule: '0 20 * * *', timeZone: FUSO, region: REGIAO },
   async () => {
-    const { total, comToken } = await usuariosComNotificacoes();
+    const { total, comToken, fonte } = await usuariosComNotificacoes();
 
     let semMetas = 0;
     let elegiveis = 0;
@@ -886,7 +893,7 @@ export const nutricaoRetaFinal = onSchedule(
       }
     }
 
-    const resumo = { usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas };
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, semMetas, elegiveis, notificados, semDispositivo, falhas, fonte };
     console.log('[nutricaoRetaFinal]', JSON.stringify(resumo));
     await registrarExecucao('nutricaoRetaFinal', resumo);
   },
@@ -901,7 +908,7 @@ const SEMANA_MS = 7 * 24 * 60 * 60 * 1000;
 export const engajamentoRotina = onSchedule(
   { schedule: '0 18 * * 5', timeZone: FUSO, region: REGIAO },
   async () => {
-    const { total, comToken } = await usuariosComNotificacoes();
+    const { total, comToken, fonte } = await usuariosComNotificacoes();
     const limite = Timestamp.fromDate(new Date(Date.now() - SEMANA_MS));
     let elegiveis = 0;
     let notificados = 0;
@@ -935,7 +942,7 @@ export const engajamentoRotina = onSchedule(
       }
     }
 
-    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas };
+    const resumo = { usuariosTotal: total, candidatos: comToken.length, elegiveis, notificados, semDispositivo, falhas, fonte };
     console.log('[engajamentoRotina]', JSON.stringify(resumo));
     await registrarExecucao('engajamentoRotina', resumo);
   },
