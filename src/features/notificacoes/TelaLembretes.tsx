@@ -30,7 +30,6 @@ type Diagnostico = {
   dispositivo: {
     tokens: number;
     achadoPelaVarredura: boolean;
-    achadoPelaQueryAntiga: boolean | null;
     usuariosNaBase: number;
     usuariosComToken: number;
     ultimoPushEnviadoEm: string | null;
@@ -267,12 +266,7 @@ export function TelaLembretes() {
                   </p>
                   <p className="t-caption mt-0.5 text-ink-faint">
                     Base: {diagnostico.dispositivo.usuariosComToken} de{' '}
-                    {diagnostico.dispositivo.usuariosNaBase} conta(s) com notificação · query antiga:{' '}
-                    {diagnostico.dispositivo.achadoPelaQueryAntiga === null
-                      ? 'falhou'
-                      : diagnostico.dispositivo.achadoPelaQueryAntiga
-                        ? 'encontrava'
-                        : 'NÃO encontrava'}
+                    {diagnostico.dispositivo.usuariosNaBase} conta(s) com notificação
                   </p>
                   <p className="t-caption mt-0.5 text-ink-faint">
                     Último push enviado: {diagnostico.dispositivo.ultimoPushEnviadoEm ?? 'nunca'} · recebido

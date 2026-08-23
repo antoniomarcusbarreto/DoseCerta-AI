@@ -74,6 +74,16 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
   const snap = await docUsuario.get();
   const tokens = (snap.data()?.fcmTokens ?? []) as string[];
   if (tokens.length === 0) {
+    /*
+     * Autocorreção de custo zero: se `notificacoesAtivas` ainda estiver
+     * `true` sem token nenhum (ex. o "Reset Total" removeu o último token
+     * sem mexer na flag, de propósito — ver `removerTokenFcm`), corrige aqui,
+     * no próximo ciclo em que este usuário for varrido, sem leitura extra:
+     * o doc já foi lido para chegar até aqui.
+     */
+    if (snap.data()?.notificacoesAtivas === true) {
+      await docUsuario.update({ notificacoesAtivas: false });
+    }
     console.log('[enviarParaUsuario]', JSON.stringify({ uid, tokens: 0, enviados: 0 }));
     return 0;
   }
@@ -167,6 +177,14 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
     atualizacao.fcmTokens = restantes;
     for (const token of descartar) {
       atualizacao[`saudeTokens.${idDoToken(token)}`] = FieldValue.delete();
+    }
+    /*
+     * A poda esvaziou o array por completo: marca `notificacoesAtivas: false`
+     * agora, no mesmo write, em vez de esperar o próximo ciclo achar o early
+     * return acima — tira este usuário da query indexada já na próxima rotina.
+     */
+    if (restantes.length === 0) {
+      atualizacao.notificacoesAtivas = false;
     }
   }
 
@@ -275,8 +293,71 @@ async function registrarExecucao(rotina: string, resumo: Record<string, unknown>
 }
 
 export async function usuariosComNotificacoes(): Promise<VarreduraUsuarios> {
-  const todos = await getFirestore().collection('users').get();
-  return { total: todos.size, comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)) };
+  const db = getFirestore();
+
+  /*
+   * Query indexada: lê só quem tem `notificacoesAtivas === true`, mantido
+   * por `salvarTokenFcm` (cliente) e `enviarParaUsuario` (servidor). É uma
+   * única igualdade — não exige índice composto, o Firestore auto-indexa
+   * campo único por padrão. `temTokens` continua filtrando por cima como
+   * segunda trava: se a flag ficou desatualizada em algum caso não previsto,
+   * o pior resultado é avaliar um usuário a mais, nunca a menos.
+   *
+   * Antes disto, `collection('users').get()` lia a base inteira 7×/dia —
+   * custo proporcional ao total de contas, não às ativas, e risco real de
+   * estourar os 60s de timeout da function conforme a base crescer.
+   */
+  try {
+    /*
+     * `total` precisa continuar sendo a base INTEIRA, não só quem tem
+     * notificação ativa — é a comparação `usuariosTotal` vs. `candidatos` no
+     * registro de execução que expoõe um usuário nunca avaliado (foi assim
+     * que o caso da Gyselle foi diagnosticado). `count()` é uma query de
+     * agregação: custa uma leitura fixa, independente do tamanho da coleção,
+     * não le os documentos.
+     */
+    const [totalSnap, comTokenSnap] = await Promise.all([
+      db.collection('users').count().get(),
+      db.collection('users').where('notificacoesAtivas', '==', true).get(),
+    ]);
+
+    /*
+     * Uma query sem match NÃO lança exceção — sucede com zero documentos.
+     * Isso é indistinguível, para o try/catch abaixo, de "de fato ninguém
+     * tem notificação ativa". A distinção que importa é: existe gente na
+     * base (`total > 0`) mas a query indexada não achou ninguém. Foi
+     * exatamente esse buraco que quase causou um apagão de um dia inteiro
+     * de rotinas na primeira vez que este código foi ao ar — a flag nunca
+     * tinha sido populada em nenhum documento existente, e a query
+     * "funcionou", só que vazia. Tratar isso como suspeito e cair para a
+     * varredura completa é o que fecha esse buraco de vez, sem depender de
+     * ninguém rodar um backfill manual antes do próximo cron dar zero.
+     */
+    if (comTokenSnap.empty && totalSnap.data().count > 0) {
+      console.error(
+        '[usuariosComNotificacoes] query indexada voltou vazia com',
+        totalSnap.data().count,
+        'usuário(s) na base — caindo para varredura completa (flag ainda não populada?)',
+      );
+      const todos = await db.collection('users').get();
+      return { total: todos.size, comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)) };
+    }
+
+    return {
+      total: totalSnap.data().count,
+      comToken: comTokenSnap.docs.filter((doc) => temTokens(doc.data().fcmTokens)),
+    };
+  } catch (falha) {
+    /*
+     * Fallback para a varredura completa. A mensagem crua de um
+     * FAILED_PRECONDITION do Firestore já embute a URL de criação do índice
+     * — útil se um dia um segundo filtro exigir índice composto. Hoje isto
+     * não deveria disparar nunca: é rede de segurança, não o caminho esperado.
+     */
+    console.error('[usuariosComNotificacoes] query indexada falhou, usando varredura completa', falha);
+    const todos = await db.collection('users').get();
+    return { total: todos.size, comToken: todos.docs.filter((doc) => temTokens(doc.data().fcmTokens)) };
+  }
 }
 
 /**
@@ -888,20 +969,6 @@ export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, a
     const varredura = await usuariosComNotificacoes();
     const achadoPelaVarredura = varredura.comToken.some((doc) => doc.id === uid);
 
-    /*
-     * Teste A/B com a query que as rotinas usavam antes. Se ela não encontrar a
-     * conta que a varredura encontra, está confirmado que o `!=` sobre array era
-     * o problema. `null` = a query nem executou (ex.: índice ausente).
-     */
-    let achadoPelaQueryAntiga: boolean | null;
-    try {
-      const antiga = await db.collection('users').where('fcmTokens', '!=', []).get();
-      achadoPelaQueryAntiga = antiga.docs.some((doc) => doc.id === uid);
-    } catch (falha) {
-      console.error('[diagnosticarNotificacoes] query antiga falhou', falha);
-      achadoPelaQueryAntiga = null;
-    }
-
     const agora = new Date();
     const inicioHoje = inicioDoDia(agora);
     const fimHoje = fimDoDia(agora);
@@ -1128,7 +1195,6 @@ export const diagnosticarNotificacoes = onCall({ region: REGIAO, cors: true }, a
       dispositivo: {
         tokens: qtdTokens,
         achadoPelaVarredura,
-        achadoPelaQueryAntiga,
         usuariosNaBase: varredura.total,
         usuariosComToken: varredura.comToken.length,
         ultimoPushEnviadoEm: ultimoPushEnviadoEm ? emBrt(ultimoPushEnviadoEm) : null,

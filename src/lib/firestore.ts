@@ -453,9 +453,17 @@ export const refUsuario = (uid: string) =>
  * Adiciona o token FCM do dispositivo atual ao array `fcmTokens` do doc raiz
  * do usuário. `arrayUnion` evita duplicar o mesmo token a cada
  * `getToken()` (o SDK costuma devolver o mesmo token enquanto ele for válido).
+ *
+ * `notificacoesAtivas` é o booleano que as rotinas agendadas consultam para
+ * não varrer a coleção `users` inteira a cada execução — ver
+ * `usuariosComNotificacoes` em `functions/src/notificacoes.ts`. Só é escrito
+ * como `true` aqui: adicionar um token sempre deixa o array não-vazio, então
+ * não há caso em que isso mentiria. O caminho inverso (zerar quando o último
+ * token sai) é responsabilidade do servidor, que já sabe o estado final do
+ * array depois de podar tokens mortos.
  */
 export const salvarTokenFcm = (uid: string, token: string) =>
-  setDoc(docUsuario(uid), { fcmTokens: arrayUnion(token) }, { merge: true });
+  setDoc(docUsuario(uid), { fcmTokens: arrayUnion(token), notificacoesAtivas: true }, { merge: true });
 
 /**
  * Confirma no SERVIDOR (não no cache local) que o token está em

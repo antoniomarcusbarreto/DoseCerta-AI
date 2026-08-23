@@ -2,7 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { SheetCard } from '@/components/SheetCard';
 import { Field } from '@/components/Field';
 import { Alerta } from '@/components/Alerta';
-import { adminAlterarSenha, adminDefinirBloqueio, adminDefinirGratuidade, adminListarUsuarios, type UsuarioPainel } from './api';
+import {
+  adminAlterarSenha,
+  adminDefinirBloqueio,
+  adminDefinirGratuidade,
+  adminListarUsuarios,
+  adminRessincronizarNotificacoes,
+  type UsuarioPainel,
+} from './api';
 
 function formatarData(iso: string | null): string {
   if (!iso) return '—';
@@ -139,6 +146,9 @@ export function TelaPainelUsuarios() {
   const [modalSenha, setModalSenha] = useState<UsuarioPainel | null>(null);
   const [modalGratuidade, setModalGratuidade] = useState<UsuarioPainel | null>(null);
 
+  const [ressincronizando, setRessincronizando] = useState(false);
+  const [resultadoRessincronizacao, setResultadoRessincronizacao] = useState<string | null>(null);
+
   async function recarregar() {
     setErro(null);
     setCarregando(true);
@@ -180,10 +190,42 @@ export function TelaPainelUsuarios() {
     }
   }
 
+  /*
+   * Ação manual, não um botão de rotina: recalcula `notificacoesAtivas` em
+   * TODA a base a partir do `fcmTokens` atual de cada usuário. Necessária uma
+   * vez para popular a flag nos usuários que existiam antes dela, e útil
+   * depois se a flag algum dia divergir por edição manual no Firestore.
+   */
+  async function ressincronizarNotificacoes() {
+    setRessincronizando(true);
+    setResultadoRessincronizacao(null);
+    setErro(null);
+    try {
+      const { totalUsuarios, atualizados } = await adminRessincronizarNotificacoes();
+      setResultadoRessincronizacao(
+        `${atualizados} de ${totalUsuarios} conta(s) corrigida(s).`,
+      );
+      await recarregar();
+    } catch {
+      setErro('Não foi possível ressincronizar as notificações.');
+    } finally {
+      setRessincronizando(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="t-title text-ink">Usuários</h1>
+        <button
+          type="button"
+          onClick={() => void ressincronizarNotificacoes()}
+          disabled={ressincronizando}
+          className="t-label rounded-full border px-3 py-1.5 text-ink-muted disabled:opacity-50"
+          style={{ borderColor: 'var(--border-hair)' }}
+        >
+          {ressincronizando ? 'Ressincronizando…' : 'Ressincronizar notificações'}
+        </button>
         <input
           type="search"
           placeholder="Buscar por e-mail ou nome…"
@@ -195,6 +237,7 @@ export function TelaPainelUsuarios() {
       </div>
 
       {erro ? <Alerta tom="danger" titulo={erro} /> : null}
+      {resultadoRessincronizacao ? <Alerta tom="ok" titulo={resultadoRessincronizacao} /> : null}
 
       <SheetCard>
         {carregando ? (

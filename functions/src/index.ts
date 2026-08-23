@@ -31,6 +31,7 @@ export {
   adminDefinirGratuidade,
   adminMetricas,
   adminEnviarBroadcast,
+  adminRessincronizarNotificacoes,
 } from './admin.js';
 export {
   webauthnIniciarRegistro,

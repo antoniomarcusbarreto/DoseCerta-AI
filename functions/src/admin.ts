@@ -416,3 +416,47 @@ export const adminEnviarBroadcast = onCall({ region: REGIAO, cors: true }, async
 
   return { enviados, totalUsuarios: comToken.length };
 });
+
+/**
+ * Ferramenta de manutenção: recalcula `notificacoesAtivas` em TODOS os
+ * usuários a partir do `fcmTokens` atual de cada um.
+ *
+ * É o único lugar do sistema que ainda faz `collection('users').get()` sem
+ * filtro — de propósito, e só aqui: é acionado manualmente pelo admin, não
+ * roda em cron. Necessário na primeira ativação da flag (nenhum documento
+ * existente a tem ainda) e útil depois se ela algum dia divergir por edição
+ * manual no console do Firestore.
+ */
+export const adminRessincronizarNotificacoes = onCall({ region: REGIAO, cors: true }, async (request) => {
+  exigirAdmin(request);
+
+  const db = getFirestore();
+  const todos = await db.collection('users').get();
+
+  let atualizados = 0;
+  let lote = db.batch();
+  let operacoesNoLote = 0;
+
+  for (const doc of todos.docs) {
+    const tokens = doc.data().fcmTokens;
+    const ativo = Array.isArray(tokens) && tokens.length > 0;
+    if (doc.data().notificacoesAtivas === ativo) continue;
+
+    lote.update(doc.ref, { notificacoesAtivas: ativo });
+    atualizados += 1;
+    operacoesNoLote += 1;
+
+    // Limite de 500 operações por batch do Firestore.
+    if (operacoesNoLote === 500) {
+      await lote.commit();
+      lote = db.batch();
+      operacoesNoLote = 0;
+    }
+  }
+
+  if (operacoesNoLote > 0) {
+    await lote.commit();
+  }
+
+  return { totalUsuarios: todos.size, atualizados };
+});

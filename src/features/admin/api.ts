@@ -71,3 +71,15 @@ export async function adminEnviarBroadcast(
   const resposta = await chamar({ titulo, corpo });
   return resposta.data;
 }
+
+export async function adminRessincronizarNotificacoes(): Promise<{
+  totalUsuarios: number;
+  atualizados: number;
+}> {
+  const chamar = httpsCallable<void, { totalUsuarios: number; atualizados: number }>(
+    getFunctionsCliente(),
+    'adminRessincronizarNotificacoes',
+  );
+  const resposta = await chamar();
+  return resposta.data;
+}
