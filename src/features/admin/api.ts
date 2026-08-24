@@ -1,6 +1,15 @@
 import { httpsCallable } from 'firebase/functions';
 import { getFunctionsCliente } from '@/lib/firebase';
 
+export type DispositivoPainel = {
+  id: string;
+  status: string;
+  plataforma: string | null;
+  ultimoEnvioEm: string | null;
+  ultimoRecebimentoEm: string | null;
+  enviosSemConfirmacao: number;
+};
+
 export type UsuarioPainel = {
   uid: string;
   email: string | null;
@@ -11,6 +20,7 @@ export type UsuarioPainel = {
   tokens: number;
   ultimoPushEnviadoEm: string | null;
   ultimoPushRecebidoEm: string | null;
+  dispositivos: DispositivoPainel[];
 };
 
 export async function iniciarLoginAdmin(email: string): Promise<void> {
@@ -101,5 +111,16 @@ export async function adminMigrarDispositivos(
     'adminMigrarDispositivos',
   );
   const resposta = await chamar({ apagarArraysAntigos });
+  return resposta.data;
+}
+
+export async function adminForcarRerregistroDispositivos(
+  uid: string,
+): Promise<{ desativados: number }> {
+  const chamar = httpsCallable<{ uid: string }, { desativados: number }>(
+    getFunctionsCliente(),
+    'adminForcarRerregistroDispositivos',
+  );
+  const resposta = await chamar({ uid });
   return resposta.data;
 }

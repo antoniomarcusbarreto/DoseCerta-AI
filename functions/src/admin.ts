@@ -256,6 +256,24 @@ type UsuarioPainel = {
   tokens: number;
   ultimoPushEnviadoEm: string | null;
   ultimoPushRecebidoEm: string | null;
+  /*
+   * Detalhe por dispositivo. A contagem agregada acima diz "tem aparelho
+   * registrado", mas não distingue um registro vivo de um obsoleto que o FCM
+   * ainda aceita — e é justamente esse o caso que gera sucesso falso nas
+   * rotinas. `enviosSemConfirmacao` alto com `ultimoRecebimentoEm` velho é a
+   * assinatura do fantasma, e sem isto na tela o diagnóstico dependia de
+   * cruzar log de function com o aparelho da pessoa na mão.
+   */
+  dispositivos: DispositivoPainel[];
+};
+
+type DispositivoPainel = {
+  id: string;
+  status: string;
+  plataforma: string | null;
+  ultimoEnvioEm: string | null;
+  ultimoRecebimentoEm: string | null;
+  enviosSemConfirmacao: number;
 };
 
 export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async (request) => {
@@ -271,8 +289,38 @@ export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async 
   } while (proximaPagina);
 
   const db = getFirestore();
-  const perfisSnap = await db.collection('users').get();
+  const [perfisSnap, dispositivosSnap] = await Promise.all([
+    db.collection('users').get(),
+    db.collectionGroup('dispositivos').get(),
+  ]);
   const perfisPorUid = new Map(perfisSnap.docs.map((doc) => [doc.id, doc.data()]));
+
+  /*
+   * Uma query só para toda a base, agrupada por uid a partir do path
+   * (`users/{uid}/dispositivos/{id}` — o uid é o antepenúltimo segmento),
+   * em vez de uma leitura de subcoleção por usuário. Mesmo padrão de
+   * `adminRessincronizarNotificacoes`.
+   */
+  const dispositivosPorUid = new Map<string, DispositivoPainel[]>();
+  for (const doc of dispositivosSnap.docs) {
+    const partes = doc.ref.path.split('/');
+    const uid = partes[partes.length - 3];
+    const d = doc.data();
+    const lista = dispositivosPorUid.get(uid) ?? [];
+    lista.push({
+      id: doc.id,
+      status: typeof d.status === 'string' ? d.status : 'desconhecido',
+      plataforma: typeof d.plataforma === 'string' ? d.plataforma : null,
+      ultimoEnvioEm:
+        d.ultimoEnvioEm instanceof Timestamp ? d.ultimoEnvioEm.toDate().toISOString() : null,
+      ultimoRecebimentoEm:
+        d.ultimoRecebimentoEm instanceof Timestamp
+          ? d.ultimoRecebimentoEm.toDate().toISOString()
+          : null,
+      enviosSemConfirmacao: Number(d.enviosSemConfirmacao ?? 0),
+    });
+    dispositivosPorUid.set(uid, lista);
+  }
 
   const usuarios: UsuarioPainel[] = usuariosAuth
     .filter((usuario) => usuario.uid !== ADMIN_UID)
@@ -293,6 +341,7 @@ export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async 
           enviadoEm instanceof Timestamp ? enviadoEm.toDate().toISOString() : null,
         ultimoPushRecebidoEm:
           recebidoEm instanceof Timestamp ? recebidoEm.toDate().toISOString() : null,
+        dispositivos: dispositivosPorUid.get(usuario.uid) ?? [],
       };
     });
 
@@ -581,3 +630,52 @@ export const adminMigrarDispositivos = onCall({ region: REGIAO, cors: true }, as
 
   return resumo;
 });
+
+/**
+ * Desativa TODOS os dispositivos de um usuário, forçando o app a registrar um
+ * token novo do zero no próximo uso.
+ *
+ * Existe para o caso em que os registros da conta estão obsoletos mas o FCM
+ * ainda os aceita: os envios "dão certo", nada chega, e esperar a poda
+ * automática levaria dias de silêncio acumulado. Esta é a versão imediata e
+ * dirigida do que a poda faz sozinha, sem depender de a pessoa reinstalar a
+ * PWA na mão.
+ *
+ * Não há perda: `useNotificacoes` no cliente revalida o token no mount, ao
+ * voltar ao primeiro plano e em intervalo fixo, e `salvarTokenFcm` recria o
+ * dispositivo já com `enviosSemConfirmacao` zerado e reativa
+ * `notificacoesAtivas`.
+ */
+export const adminForcarRerregistroDispositivos = onCall(
+  { region: REGIAO, cors: true },
+  async (request) => {
+    exigirAdmin(request);
+
+    const { uid } = request.data as { uid?: string };
+    if (!uid) {
+      throw new HttpsError('invalid-argument', 'uid é obrigatório.');
+    }
+
+    const db = getFirestore();
+    const docUsuario = db.collection('users').doc(uid);
+    const dispositivos = await docUsuario.collection('dispositivos').get();
+
+    const lote = db.batch();
+    for (const doc of dispositivos.docs) {
+      lote.update(doc.ref, { status: 'inativo' });
+    }
+    /*
+     * Zerar os agregados no mesmo batch: são eles que sustentam a query
+     * indexada das rotinas, e deixá-los apontando para dispositivos que
+     * acabaram de ser desativados recriaria o mesmo sucesso falso.
+     */
+    lote.set(
+      docUsuario,
+      { notificacoesAtivas: false, totalDispositivosAtivos: 0 },
+      { merge: true },
+    );
+    await lote.commit();
+
+    return { desativados: dispositivos.size };
+  },
+);

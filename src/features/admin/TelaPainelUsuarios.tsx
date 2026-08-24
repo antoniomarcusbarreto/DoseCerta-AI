@@ -6,11 +6,27 @@ import {
   adminAlterarSenha,
   adminDefinirBloqueio,
   adminDefinirGratuidade,
+  adminForcarRerregistroDispositivos,
   adminListarUsuarios,
   adminMigrarDispositivos,
   adminRessincronizarNotificacoes,
+  type DispositivoPainel,
   type UsuarioPainel,
 } from './api';
+
+/*
+ * Silêncio acumulado é o que denuncia um registro obsoleto que o FCM ainda
+ * aceita — os envios "dão certo" e nada chega. Metade do limiar de poda do
+ * servidor (15), para o painel acusar o problema antes de a rotina agir.
+ */
+const ENVIOS_SEM_CONFIRMACAO_SUSPEITO = 8;
+
+function ehFantasma(dispositivo: DispositivoPainel): boolean {
+  return (
+    dispositivo.status === 'ativo' &&
+    dispositivo.enviosSemConfirmacao >= ENVIOS_SEM_CONFIRMACAO_SUSPEITO
+  );
+}
 
 function formatarData(iso: string | null): string {
   if (!iso) return '—';
@@ -150,6 +166,8 @@ export function TelaPainelUsuarios() {
   const [ressincronizando, setRessincronizando] = useState(false);
   const [resultadoRessincronizacao, setResultadoRessincronizacao] = useState<string | null>(null);
 
+  const [rerregistrando, setRerregistrando] = useState<string | null>(null);
+
   const [migrando, setMigrando] = useState(false);
   const [migracaoConcluida, setMigracaoConcluida] = useState(false);
   const [resultadoMigracao, setResultadoMigracao] = useState<string | null>(null);
@@ -192,6 +210,36 @@ export function TelaPainelUsuarios() {
       setErro('Não foi possível atualizar o bloqueio deste usuário.');
     } finally {
       setAlterandoBloqueio(null);
+    }
+  }
+
+  /*
+   * Desativa os registros de dispositivo da conta, forçando o app a gerar um
+   * token novo no próximo uso. Para quando os registros estão obsoletos mas o
+   * FCM ainda os aceita: os envios "dão certo", nada chega no aparelho, e
+   * esperar a poda automática levaria dias de silêncio acumulado.
+   */
+  async function forcarRerregistro(usuario: UsuarioPainel) {
+    const alvo = usuario.email ?? usuario.uid;
+    if (
+      !window.confirm(
+        `Desativar os ${usuario.dispositivos.length} registro(s) de dispositivo de ${alvo}? ` +
+          'O app vai registrar um token novo automaticamente no próximo uso.',
+      )
+    ) {
+      return;
+    }
+
+    setRerregistrando(usuario.uid);
+    setErro(null);
+    try {
+      const { desativados } = await adminForcarRerregistroDispositivos(usuario.uid);
+      setResultadoRessincronizacao(`${desativados} dispositivo(s) desativado(s) para ${alvo}.`);
+      await recarregar();
+    } catch {
+      setErro('Não foi possível resetar os dispositivos deste usuário.');
+    } finally {
+      setRerregistrando(null);
     }
   }
 
@@ -374,6 +422,30 @@ export function TelaPainelUsuarios() {
                           Recebido: {formatarDataHora(usuario.ultimoPushRecebidoEm)}
                         </p>
                       ) : null}
+                      {usuario.dispositivos.length > 0 ? (
+                        <ul className="mt-2 space-y-1">
+                          {usuario.dispositivos.map((dispositivo) => (
+                            <li key={dispositivo.id} className="t-label text-ink-muted">
+                              <span
+                                className="rounded-full px-2 py-0.5"
+                                style={{
+                                  background: ehFantasma(dispositivo)
+                                    ? 'var(--danger-soft)'
+                                    : 'var(--surface-sunken)',
+                                  color: ehFantasma(dispositivo) ? 'var(--danger)' : 'var(--ink-muted)',
+                                }}
+                              >
+                                {dispositivo.plataforma ?? 'desconhecida'} · {dispositivo.status}
+                                {dispositivo.enviosSemConfirmacao > 0
+                                  ? ` · ${dispositivo.enviosSemConfirmacao} sem confirmar`
+                                  : null}
+                              </span>
+                              <br />
+                              últ. recebido: {formatarDataHora(dispositivo.ultimoRecebimentoEm)}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </td>
                     <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
                       <span
@@ -412,6 +484,16 @@ export function TelaPainelUsuarios() {
                         >
                           {usuario.disabled ? 'Desbloquear' : 'Bloquear'}
                         </button>
+                        {usuario.dispositivos.length > 0 ? (
+                          <button
+                            type="button"
+                            disabled={rerregistrando === usuario.uid}
+                            onClick={() => void forcarRerregistro(usuario)}
+                            className="t-label text-ink-muted hover:text-ink hover:underline disabled:opacity-45"
+                          >
+                            {rerregistrando === usuario.uid ? 'Resetando…' : 'Resetar dispositivos'}
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

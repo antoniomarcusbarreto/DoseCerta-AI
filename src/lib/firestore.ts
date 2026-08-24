@@ -508,6 +508,17 @@ export async function salvarTokenFcm(uid: string, token: string): Promise<void> 
         status: 'ativo',
         plataforma: plataformaAtual(),
         criadoEm: serverTimestamp(),
+        /*
+         * Zera o contador de silêncio só na REATIVAÇÃO (doc ausente ou que
+         * estava inativo). Um dispositivo que o servidor podou e que o
+         * cliente re-registra precisa começar do zero, senão volta com o
+         * contador já estourado e é podado de novo no primeiro envio — um
+         * flapping infinito. Já um dispositivo continuamente ativo não pode
+         * ter isso zerado: o contador é justamente o que denuncia o fantasma,
+         * e o app estar aberto não prova que o Service Worker acorda para
+         * push (que é exatamente o caso que o fantasma representa).
+         */
+        ...(jaEstavaAtivo ? {} : { enviosSemConfirmacao: 0 }),
       },
       { merge: true },
     );

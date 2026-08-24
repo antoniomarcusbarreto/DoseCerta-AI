@@ -33,6 +33,7 @@ export {
   adminEnviarBroadcast,
   adminRessincronizarNotificacoes,
   adminMigrarDispositivos,
+  adminForcarRerregistroDispositivos,
 } from './admin.js';
 export {
   webauthnIniciarRegistro,

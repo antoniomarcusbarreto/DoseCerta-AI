@@ -22,6 +22,14 @@ const FUSO = 'America/Sao_Paulo';
 const ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE = 15;
 
 /*
+ * O mesmo, para conta que não tem NENHUM dispositivo confirmado com que
+ * comparar. Sem irmão saudável, a chance de o silêncio ser falha transitória
+ * de rede (e não um registro morto) é maior, então exige o dobro de silêncio
+ * — uns 4 a 5 dias — antes de desativar o único registro da pessoa.
+ */
+const ENVIOS_SEM_CONFIRMACAO_SEM_IRMAO = 30;
+
+/*
  * Teto de dispositivos por conta. Ninguém usa o app em cinco aparelhos ao
  * mesmo tempo; passar disso significa registros obsoletos acumulando.
  */
@@ -69,12 +77,29 @@ function colecaoDispositivos(uid: string) {
  *    identificá-lo pela ausência de confirmação de recebimento.
  * 3. Acúmulo puro e simples, contido pelo teto de `MAX_DISPOSITIVOS`.
  *
- * A poda de fantasma exige um irmão saudável na mesma conta, de propósito:
- * a confirmação depende de um `fetch` best-effort dentro do Service Worker,
- * que pode falhar por rede sem que a notificação tenha falhado. Sem essa
- * trava, um aparelho que exibe tudo corretamente mas nunca consegue
- * confirmar acabaria descadastrado — trocaríamos um bug silencioso por
- * outro pior.
+ * O critério do fantasma é SILÊNCIO ACUMULADO (`enviosSemConfirmacao`), não
+ * "nunca confirmou". A versão anterior só podava quem jamais tinha confirmado,
+ * e isso criava um sucesso falso permanente: um registro que confirmou uma
+ * única vez e depois morreu — token rotacionado, PWA reinstalada, inscrição
+ * revogada pelo SO — ficava marcado como saudável para sempre, imune à poda.
+ * O FCM segue aceitando esse registro morto por muito tempo antes de declarar
+ * `registration-token-not-registered`, então a rotina registrava
+ * `notificados: N` indefinidamente enquanto a pessoa não recebia nada, sem
+ * nenhum caminho de autocorreção. Foi exatamente esse o caso que motivou a
+ * mudança, diagnosticado em produção.
+ *
+ * O irmão saudável deixou de ser porta de entrada da poda e virou só a
+ * escolha do limiar. A confirmação depende de um `fetch` best-effort dentro
+ * do Service Worker, que pode falhar por rede sem que a notificação tenha
+ * falhado — daí a cautela. Mas exigir irmão travava justamente a conta de
+ * dispositivo único, que é quem mais precisa da poda: sem ninguém com quem
+ * comparar, nada era podado nunca. Agora ela também é podada, só que com o
+ * dobro de silêncio exigido (`ENVIOS_SEM_CONFIRMACAO_SEM_IRMAO`).
+ *
+ * Desativar não é perda: o cliente re-registra um token novo sozinho no
+ * próximo uso do app (rechecks de `useNotificacoes` no mount, no
+ * `visibilitychange` e no intervalo em primeiro plano), que é exatamente o
+ * que uma reinstalação manual da PWA fazia — agora automático.
  */
 export async function enviarParaUsuario(uid: string, titulo: string, corpo: string): Promise<number> {
   const db = getFirestore();
@@ -155,18 +180,20 @@ export async function enviarParaUsuario(uid: string, titulo: string, corpo: stri
     if (!r.success && ehTokenInvalido(r.error?.code)) descartar.add(ids[i]);
   });
 
-  // (2) fantasmas — só quando há outro dispositivo da conta que já confirmou
+  /*
+   * (2) fantasmas — silêncio acumulado, tenha o dispositivo confirmado no
+   * passado ou não. Ter um irmão saudável na conta só afrouxa o limiar: com
+   * ninguém para comparar, exige o dobro de silêncio antes de agir.
+   */
   const existeSaudavel = ids.some((id) => !descartar.has(id) && saude.get(id)?.ultimoRecebimentoEm);
-  if (existeSaudavel) {
-    for (const id of ids) {
-      if (descartar.has(id)) continue;
-      const s = saude.get(id);
-      const nuncaConfirmou = !s?.ultimoRecebimentoEm;
-      const semConfirmacao = s?.enviosSemConfirmacao ?? 0;
-      if (nuncaConfirmou && semConfirmacao >= ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE) {
-        descartar.add(id);
-      }
-    }
+  const limite = existeSaudavel
+    ? ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE
+    : ENVIOS_SEM_CONFIRMACAO_SEM_IRMAO;
+
+  for (const id of ids) {
+    if (descartar.has(id)) continue;
+    const semConfirmacao = saude.get(id)?.enviosSemConfirmacao ?? 0;
+    if (semConfirmacao >= limite) descartar.add(id);
   }
 
   // (3) teto: mantém os que confirmaram mais recentemente
