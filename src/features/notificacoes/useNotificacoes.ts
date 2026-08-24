@@ -151,6 +151,32 @@ export function useNotificacoes() {
     return () => document.removeEventListener('visibilitychange', aoVoltar);
   }, [usuario, precisaInstalar, obterEPersistirToken]);
 
+  /*
+   * Mesmo recheck, mas em intervalo fixo enquanto o app fica aberto em
+   * primeiro plano — não só nas bordas de mount/volta ao app. No iOS, manter
+   * a aba/PWA em uso parece ser o que mantém a inscrição de push "quente" no
+   * WebKit; uma sessão longa sem nenhuma interação com o SW não teria motivo
+   * pra revalidar nada até o usuário sair e voltar. Silencioso de propósito:
+   * mesmo tratamento de erro do recheck de `visibilitychange` (só console),
+   * sem tocar em nenhum estado visível — o botão "Sincronizar Dispositivo"
+   * continua sendo o único ponto com feedback na tela.
+   */
+  useEffect(() => {
+    if (!usuario || precisaInstalar) return;
+    if (typeof Notification === 'undefined') return;
+
+    const INTERVALO_MS = 20 * 60 * 1000;
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (Notification.permission !== 'granted') return;
+      obterEPersistirToken().catch((falha: unknown) => {
+        console.error('[DoseCerta] recheck periódico de notificações falhou:', falha);
+      });
+    }, INTERVALO_MS);
+
+    return () => window.clearInterval(id);
+  }, [usuario, precisaInstalar, obterEPersistirToken]);
+
   const sincronizarDispositivo = useCallback(async () => {
     if (!usuario || precisaInstalar) return;
     if (typeof Notification === 'undefined') {
