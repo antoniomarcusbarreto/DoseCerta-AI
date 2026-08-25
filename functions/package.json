@@ -16,9 +16,11 @@
   "dependencies": {
     "@google/genai": "^2.16.0",
     "@simplewebauthn/server": "^13.3.2",
+    "@types/web-push": "^3.6.4",
     "firebase-admin": "^14.2.0",
     "firebase-functions": "^7.3.2",
-    "mammoth": "^1.8.0"
+    "mammoth": "^1.8.0",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "typescript": "^5.7.3"

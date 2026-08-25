@@ -9,29 +9,13 @@ import {
   adminEnviarPushTeste,
   adminForcarRerregistroDispositivos,
   adminListarUsuarios,
-  adminMigrarDispositivos,
   adminRessincronizarNotificacoes,
-  type DispositivoPainel,
   type ResultadoEnvioTeste,
   type UsuarioPainel,
 } from './api';
 
-/*
- * Silêncio acumulado é o que denuncia um registro obsoleto que o FCM ainda
- * aceita — os envios "dão certo" e nada chega. Metade do limiar de poda do
- * servidor (15), para o painel acusar o problema antes de a rotina agir.
- */
-const ENVIOS_SEM_CONFIRMACAO_SUSPEITO = 8;
-
 /** Espelha `MAX_ALVOS_TESTE` no servidor — aqui só para avisar antes da chamada. */
 const MAX_ALVOS_TESTE = 20;
-
-function ehFantasma(dispositivo: DispositivoPainel): boolean {
-  return (
-    dispositivo.status === 'ativo' &&
-    dispositivo.enviosSemConfirmacao >= ENVIOS_SEM_CONFIRMACAO_SUSPEITO
-  );
-}
 
 function formatarData(iso: string | null): string {
   if (!iso) return '—';
@@ -324,7 +308,6 @@ function CelulaNotificacoes({
 }) {
   const ativos = usuario.dispositivos.filter((dispositivo) => dispositivo.status === 'ativo');
   const inativos = usuario.dispositivos.length - ativos.length;
-  const fantasmas = ativos.filter(ehFantasma).length;
   /*
    * `usuario.tokens` é o agregado `totalDispositivosAtivos` do doc do usuário;
    * `ativos` vem da subcoleção. Divergência entre os dois é justamente o que
@@ -352,14 +335,6 @@ function CelulaNotificacoes({
             ? `${totalAtivos} dispositivo${totalAtivos > 1 ? 's' : ''} ativo${totalAtivos > 1 ? 's' : ''}`
             : 'Sem dispositivo'}
         </span>
-        {fantasmas > 0 ? (
-          <span
-            className="t-label rounded-full px-2.5 py-1"
-            style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}
-          >
-            {fantasmas} sem confirmar
-          </span>
-        ) : null}
       </div>
 
       {usuario.dispositivos.length > 0 || usuario.ultimoPushEnviadoEm ? (
@@ -393,16 +368,11 @@ function CelulaNotificacoes({
                   <span
                     className="rounded-full px-2 py-0.5"
                     style={{
-                      background: ehFantasma(dispositivo)
-                        ? 'var(--danger-soft)'
-                        : 'var(--surface-sunken)',
-                      color: ehFantasma(dispositivo) ? 'var(--danger)' : 'var(--ink-muted)',
+                      background: 'var(--surface-sunken)',
+                      color: 'var(--ink-muted)',
                     }}
                   >
                     {dispositivo.plataforma ?? 'desconhecida'} · {dispositivo.status}
-                    {dispositivo.enviosSemConfirmacao > 0
-                      ? ` · ${dispositivo.enviosSemConfirmacao} sem confirmar`
-                      : null}
                   </span>
                   <br />
                   últ. recebido: {formatarDataHora(dispositivo.ultimoRecebimentoEm)}
@@ -435,9 +405,6 @@ export function TelaPainelUsuarios() {
 
   const [rerregistrando, setRerregistrando] = useState<string | null>(null);
 
-  const [migrando, setMigrando] = useState(false);
-  const [migracaoConcluida, setMigracaoConcluida] = useState(false);
-  const [resultadoMigracao, setResultadoMigracao] = useState<string | null>(null);
 
   async function recarregar() {
     setErro(null);
@@ -582,73 +549,15 @@ export function TelaPainelUsuarios() {
   }
 
   /*
-   * Migração única do modelo antigo (`fcmTokens` array) para a subcoleção
-   * `dispositivos`. Roda sem apagar os arrays antigos — só depois de validar
-   * o modelo novo (contagens no painel batendo, um envio de teste chegando)
-   * é que faz sentido chamar `apagarArraysAntigos`.
+   * Desativa os registros de inscrição da conta, forçando o app a criar uma
+   * inscrição nova no próximo uso.
    */
-  async function migrarDispositivos() {
-    setMigrando(true);
-    setResultadoMigracao(null);
-    setErro(null);
-    try {
-      const resumo = await adminMigrarDispositivos(false);
-      setResultadoMigracao(
-        `${resumo.usuariosMigrados} conta(s) migrada(s), ${resumo.dispositivosCriados} dispositivo(s) criado(s), ` +
-          `${resumo.usuariosSemToken} sem token, ${resumo.falhas.length} falha(s).`,
-      );
-      setMigracaoConcluida(resumo.falhas.length === 0 && resumo.usuariosMigrados > 0);
-      await recarregar();
-    } catch {
-      setErro('Não foi possível migrar os dispositivos.');
-    } finally {
-      setMigrando(false);
-    }
-  }
-
-  async function apagarArraysAntigos() {
-    if (!window.confirm('Isso apaga fcmTokens/saudeTokens de todos os usuários já migrados. Confirmar?')) {
-      return;
-    }
-    setMigrando(true);
-    setErro(null);
-    try {
-      const resumo = await adminMigrarDispositivos(true);
-      setResultadoMigracao(`Arrays antigos apagados de ${resumo.arraysAntigosApagados} conta(s).`);
-      setMigracaoConcluida(false);
-    } catch {
-      setErro('Não foi possível apagar os arrays antigos.');
-    } finally {
-      setMigrando(false);
-    }
-  }
-
   const bordaHair = { borderColor: 'var(--border-hair)' };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="t-title text-ink">Usuários</h1>
-        <button
-          type="button"
-          onClick={() => void migrarDispositivos()}
-          disabled={migrando}
-          className="t-label rounded-full border px-3 py-1.5 text-ink-muted disabled:opacity-50"
-          style={bordaHair}
-        >
-          {migrando ? 'Migrando…' : 'Migrar para subcoleção de dispositivos'}
-        </button>
-        {migracaoConcluida ? (
-          <button
-            type="button"
-            onClick={() => void apagarArraysAntigos()}
-            disabled={migrando}
-            className="t-label rounded-full border px-3 py-1.5 text-ink-muted disabled:opacity-50"
-            style={bordaHair}
-          >
-            Apagar arrays antigos
-          </button>
-        ) : null}
         <button
           type="button"
           onClick={() => void ressincronizarNotificacoes()}
@@ -669,7 +578,6 @@ export function TelaPainelUsuarios() {
       </div>
 
       {erro ? <Alerta tom="danger" titulo={erro} /> : null}
-      {resultadoMigracao ? <Alerta tom="ok" titulo={resultadoMigracao} /> : null}
       {resultadoRessincronizacao ? <Alerta tom="ok" titulo={resultadoRessincronizacao} /> : null}
 
       {selecionados.size > 0 ? (

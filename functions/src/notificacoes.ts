@@ -6,28 +6,44 @@ import {
   type DocumentSnapshot,
   type QueryDocumentSnapshot,
 } from 'firebase-admin/firestore';
-import { getMessaging } from 'firebase-admin/messaging';
+import { defineSecret } from 'firebase-functions/params';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
+import webpush from 'web-push';
 
 const REGIAO = 'southamerica-east1';
 const FUSO = 'America/Sao_Paulo';
 
 /*
- * Quantos envios seguidos sem nenhuma confirmação do aparelho antes de
- * considerar um token fantasma. Com ~6 rotinas por dia, 15 envios são uns
- * 2 a 3 dias de silêncio total — folga suficiente para um celular
- * desligado ou em Foco não ser descartado à toa.
+ * Par VAPID do Web Push. A pública também vive no cliente
+ * (`VITE_VAPID_PUBLIC_KEY`) — é ela que assina a inscrição no navegador, e
+ * as duas TÊM de ser do mesmo par: com chaves trocadas o push service recusa
+ * todo envio com 403.
  */
-const ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE = 15;
+const vapidPrivateKey = defineSecret('VAPID_PRIVATE_KEY');
+const VAPID_PUBLIC_KEY = 'BCuw6lzoB8HRae3XGrA5FkuUHOP_Q1H7ggfPImg5VLxZOxKMQKCMBAQ-SNxsjIuzxlFAy0w7Td4xk39kIGd0ObA';
+const CONTATO_VAPID = 'mailto:suporte@codehatch.com.br';
 
 /*
- * O mesmo, para conta que não tem NENHUM dispositivo confirmado com que
- * comparar. Sem irmão saudável, a chance de o silêncio ser falha transitória
- * de rede (e não um registro morto) é maior, então exige o dobro de silêncio
- * — uns 4 a 5 dias — antes de desativar o único registro da pessoa.
+ * `setVapidDetails` é global no módulo `web-push` e o secret só pode ser lido
+ * DENTRO da execução da function — por isso a configuração acontece na
+ * primeira chamada de envio, não no escopo do módulo. Ler `vapidPrivateKey`
+ * no topo do arquivo quebraria o deploy na análise do código.
  */
-const ENVIOS_SEM_CONFIRMACAO_SEM_IRMAO = 30;
+let vapidConfigurado = false;
+function garantirVapid(): void {
+  if (vapidConfigurado) return;
+  webpush.setVapidDetails(CONTATO_VAPID, VAPID_PUBLIC_KEY, vapidPrivateKey.value());
+  vapidConfigurado = true;
+}
+
+/*
+ * Opções comuns a toda function que envia push: além da região, elas
+ * precisam declarar o secret da chave privada. Esquecer o secret em uma
+ * function faz só ela falhar em runtime, o que é justamente o tipo de falha
+ * parcial difícil de perceber — centralizar aqui evita isso.
+ */
+export const OPCOES_ENVIO = { region: REGIAO, secrets: [vapidPrivateKey] };
 
 /*
  * Teto de dispositivos por conta. Ninguém usa o app em cinco aparelhos ao
@@ -36,25 +52,31 @@ const ENVIOS_SEM_CONFIRMACAO_SEM_IRMAO = 30;
 const MAX_DISPOSITIVOS = 5;
 
 type Dispositivo = {
-  token: string;
+  /*
+   * `endpoint` é a URL do push service do navegador e identifica a inscrição;
+   * `keys` são as chaves com que o web-push CIFRA o payload. Web Push é
+   * criptografado ponta a ponta, então uma sem a outra não envia nada.
+   */
+  endpoint: string;
+  keys?: { p256dh?: string; auth?: string };
   status: 'ativo' | 'inativo';
   plataforma?: string;
-  enviosSemConfirmacao?: number;
   ultimoEnvioEm?: unknown;
   ultimoRecebimentoEm?: unknown;
 };
 
 /**
- * Identificador curto e estável de um token, derivado dele mesmo.
+ * Identificador curto e estável de uma inscrição, derivado do seu endpoint.
  *
- * O token em si nunca vai para log nem trafega de volta do aparelho: é
- * credencial de envio. O hash permite o Service Worker dizer "fui eu que
- * recebi" sem expor nada, e dá sempre a mesma chave para o mesmo token — é o
- * próprio id do documento em `users/{uid}/dispositivos/{id}`. Só hex, então
- * serve como caminho de campo/id do Firestore sem escape.
+ * O endpoint é credencial de envio e nunca vai para log. O hash permite o
+ * Service Worker dizer "fui eu que recebi" sem expor nada, e dá sempre a
+ * mesma chave para a mesma inscrição — é o próprio id do documento em
+ * `users/{uid}/dispositivos/{id}`. Só hex, então serve como id do Firestore
+ * sem escape. O cliente calcula o mesmo hash via Web Crypto
+ * (`idDoEndpointCliente` em `src/lib/firestore.ts`).
  */
-export function idDoToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex').slice(0, 20);
+export function idDoEndpoint(endpoint: string): string {
+  return createHash('sha256').update(endpoint).digest('hex').slice(0, 20);
 }
 
 function colecaoDispositivos(uid: string) {
@@ -62,251 +84,184 @@ function colecaoDispositivos(uid: string) {
 }
 
 /**
- * Envia uma notificação para os dispositivos registrados em `users/{uid}` e
- * poda o que não serve mais.
+ * Envia uma notificação para as inscrições de Web Push registradas em
+ * `users/{uid}/dispositivos` e limpa as que o push service recusa.
  *
- * São três causas distintas de lixo, e cada uma exige um critério próprio:
+ * A limpeza aqui é simples de propósito, e isso é uma consequência direta da
+ * arquitetura: o Web Push devolve **404/410 Gone** quando a inscrição não
+ * existe mais, um sinal DEFINITIVO vindo do próprio push service. Basta
+ * acreditar nele.
  *
- * 1. Token que o FCM declara morto (app desinstalado, permissão revogada).
- *    Fácil: o próprio FCM avisa no retorno do envio.
- * 2. Token *fantasma* — o FCM ainda aceita, mas nenhum Service Worker acorda
- *    do outro lado. Nasce de PWA reinstalado ou de contextos separados no
- *    iOS (Safari vs. app na Tela de Início). Este é o perigoso: como o envio
- *    "dá certo", `successCount` sobe, a rotina contabiliza sucesso e o log
- *    fica limpo enquanto ninguém vê notificação nenhuma. Só dá para
- *    identificá-lo pela ausência de confirmação de recebimento.
- * 3. Acúmulo puro e simples, contido pelo teto de `MAX_DISPOSITIVOS`.
+ * A versão anterior usava FCM, que aceita registro morto por muito tempo sem
+ * admitir — o envio "dá certo", o log fica limpo e ninguém recebe nada. Para
+ * contornar essa mentira existia toda uma heurística de silêncio acumulado
+ * (contar envios sem confirmação e adivinhar quando descartar), com limiares
+ * diferentes conforme a conta tivesse ou não outro aparelho saudável. Nada
+ * disso é mais necessário: o 410 substitui a adivinhação por um fato.
  *
- * O critério do fantasma é SILÊNCIO ACUMULADO (`enviosSemConfirmacao`), não
- * "nunca confirmou". A versão anterior só podava quem jamais tinha confirmado,
- * e isso criava um sucesso falso permanente: um registro que confirmou uma
- * única vez e depois morreu — token rotacionado, PWA reinstalada, inscrição
- * revogada pelo SO — ficava marcado como saudável para sempre, imune à poda.
- * O FCM segue aceitando esse registro morto por muito tempo antes de declarar
- * `registration-token-not-registered`, então a rotina registrava
- * `notificados: N` indefinidamente enquanto a pessoa não recebia nada, sem
- * nenhum caminho de autocorreção. Foi exatamente esse o caso que motivou a
- * mudança, diagnosticado em produção.
+ * A confirmação de recebimento (`ultimoRecebimentoEm`, gravada por
+ * `confirmarRecebimentoPush`) continua existindo, mas agora só como
+ * diagnóstico — não decide mais poda nenhuma.
  *
- * O irmão saudável deixou de ser porta de entrada da poda e virou só a
- * escolha do limiar. A confirmação depende de um `fetch` best-effort dentro
- * do Service Worker, que pode falhar por rede sem que a notificação tenha
- * falhado — daí a cautela. Mas exigir irmão travava justamente a conta de
- * dispositivo único, que é quem mais precisa da poda: sem ninguém com quem
- * comparar, nada era podado nunca. Agora ela também é podada, só que com o
- * dobro de silêncio exigido (`ENVIOS_SEM_CONFIRMACAO_SEM_IRMAO`).
- *
- * Desativar não é perda: o cliente re-registra um token novo sozinho no
- * próximo uso do app (rechecks de `useNotificacoes` no mount, no
- * `visibilitychange` e no intervalo em primeiro plano), que é exatamente o
- * que uma reinstalação manual da PWA fazia — agora automático.
+ * Cada inscrição é enviada e tratada isoladamente: uma falha nunca aborta as
+ * demais nem derruba a rotina.
  */
 export async function enviarParaUsuario(uid: string, titulo: string, corpo: string): Promise<number> {
   const db = getFirestore();
   const docUsuario = db.collection('users').doc(uid);
   const dispositivosSnap = await colecaoDispositivos(uid).where('status', '==', 'ativo').get();
   const dispositivos = dispositivosSnap.docs;
-  const tokens = dispositivos.map((d) => (d.data() as Dispositivo).token);
 
-  if (tokens.length === 0) {
+  if (dispositivos.length === 0) {
     /*
      * Autocorreção de custo zero: se `notificacoesAtivas` ainda estiver
-     * `true` sem dispositivo nenhum (ex. o "Reset Total" removeu o último
-     * dispositivo sem mexer na flag, de propósito — ver `removerTokenFcm`),
-     * corrige aqui, no próximo ciclo em que este usuário for varrido.
+     * `true` sem dispositivo nenhum, corrige aqui, no próximo ciclo em que
+     * este usuário for varrido.
      */
     const usuario = await docUsuario.get();
-    if (usuario.data()?.notificacoesAtivas === true || usuario.data()?.totalDispositivosAtivos > 0) {
+    if (usuario.data()?.notificacoesAtivas === true || Number(usuario.data()?.totalDispositivosAtivos ?? 0) > 0) {
       await docUsuario.update({ notificacoesAtivas: false, totalDispositivosAtivos: 0 });
     }
-    console.log('[enviarParaUsuario]', JSON.stringify({ uid, tokens: 0, enviados: 0 }));
+    console.log('[enviarParaUsuario]', JSON.stringify({ uid, dispositivos: 0, enviados: 0 }));
     return 0;
   }
 
-  const saude = new Map(dispositivos.map((d) => [d.id, d.data() as Dispositivo]));
+  garantirVapid();
   const enviadoEm = Date.now();
 
   /*
-   * `sendEach` em vez de `sendEachForMulticast`: o multicast manda o MESMO
-   * payload para todos os tokens, então não havia como cada aparelho saber
-   * qual registro ele é ao confirmar o recebimento. Com uma mensagem por
-   * token, cada uma leva o seu `dispositivoId`. O custo é o mesmo: o
-   * multicast também despacha individualmente por baixo.
+   * Teto de dispositivos: mantém os que confirmaram recebimento mais
+   * recentemente. Quem nunca confirmou conta como o mais antigo.
    */
-  const ids = dispositivos.map((d) => d.id);
-
-  const mensagens = tokens.map((token, i) => ({
-    token,
-    /*
-     * `notification` no topo é obrigatório: sem ele o iOS trata a mensagem
-     * como data-only e não exibe banner nenhum com o app fechado.
-     */
-    notification: { title: titulo, body: corpo },
-    data: { uid, dispositivoId: ids[i], enviadoEm: String(enviadoEm) },
-    /*
-     * Bloco `apns` explícito: o iOS descarta o push silenciosamente com o
-     * app em force-close se a prioridade/tipo não vierem declarados aqui.
-     */
-    apns: {
-      headers: {
-        'apns-priority': '10',
-        'apns-push-type': 'alert',
-      },
-      payload: {
-        aps: {
-          alert: { title: titulo, body: corpo },
-          contentAvailable: true,
-          mutableContent: true,
-        },
-      },
-    },
-    webpush: {
-      headers: { Urgency: 'high', TTL: '86400' },
-      notification: {
-        title: titulo,
-        body: corpo,
-        icon: '/icons/icon-192.png',
-        badge: '/icons/icon-192.png',
-      },
-      fcmOptions: { link: '/' },
-    },
-  }));
-
-  const resposta = await getMessaging().sendEach(mensagens);
-
-  // (1) mortos declarados pelo próprio FCM
-  const descartar = new Set<string>();
-  resposta.responses.forEach((r, i) => {
-    if (!r.success && ehTokenInvalido(r.error?.code)) descartar.add(ids[i]);
-  });
-
-  /*
-   * (2) fantasmas — silêncio acumulado, tenha o dispositivo confirmado no
-   * passado ou não. Ter um irmão saudável na conta só afrouxa o limiar: com
-   * ninguém para comparar, exige o dobro de silêncio antes de agir.
-   */
-  const existeSaudavel = ids.some((id) => !descartar.has(id) && saude.get(id)?.ultimoRecebimentoEm);
-  const limite = existeSaudavel
-    ? ENVIOS_SEM_CONFIRMACAO_PARA_DESCARTE
-    : ENVIOS_SEM_CONFIRMACAO_SEM_IRMAO;
-
-  for (const id of ids) {
-    if (descartar.has(id)) continue;
-    const semConfirmacao = saude.get(id)?.enviosSemConfirmacao ?? 0;
-    if (semConfirmacao >= limite) descartar.add(id);
-  }
-
-  // (3) teto: mantém os que confirmaram mais recentemente
-  let restantes = ids.filter((id) => !descartar.has(id));
-  if (restantes.length > MAX_DISPOSITIVOS) {
-    const quando = (id: string) => {
-      const valor = saude.get(id)?.ultimoRecebimentoEm;
+  let alvos = dispositivos;
+  const excedentes: string[] = [];
+  if (alvos.length > MAX_DISPOSITIVOS) {
+    const quando = (doc: QueryDocumentSnapshot) => {
+      const valor = (doc.data() as Dispositivo).ultimoRecebimentoEm;
       return valor instanceof Timestamp ? valor.toMillis() : 0;
     };
-    const ordenados = [...restantes].sort((a, b) => quando(b) - quando(a));
-    for (const id of ordenados.slice(MAX_DISPOSITIVOS)) descartar.add(id);
-    restantes = ordenados.slice(0, MAX_DISPOSITIVOS);
+    const ordenados = [...alvos].sort((a, b) => quando(b) - quando(a));
+    for (const doc of ordenados.slice(MAX_DISPOSITIVOS)) excedentes.push(doc.id);
+    alvos = ordenados.slice(0, MAX_DISPOSITIVOS);
   }
 
-  /*
-   * Todo write desta rotina — poda de dispositivo, contador de saúde e o
-   * total agregado no doc raiz — sai num único `batch`. Um `batch` não aceita
-   * duas chamadas separadas de `update` sobre o MESMO documento, então cada
-   * documento (o usuário, e cada dispositivo) acumula suas mudanças num único
-   * objeto antes de entrar no lote.
-   */
-  const atualizacoesPorDispositivo = new Map<string, Record<string, unknown>>();
-  const atualizacaoUsuario: Record<string, unknown> = {};
+  const descartar = new Set<string>(excedentes);
+  let enviados = 0;
+  const erros: string[] = [];
 
-  const paraDispositivo = (id: string): Record<string, unknown> => {
-    let atual = atualizacoesPorDispositivo.get(id);
-    if (!atual) {
-      atual = {};
-      atualizacoesPorDispositivo.set(id, atual);
+  /*
+   * Sequencial e com `try/catch` individual: o volume por usuário é de no
+   * máximo `MAX_DISPOSITIVOS`, então paralelizar não compensa a perda de
+   * clareza — e o isolamento por inscrição é o que importa aqui.
+   */
+  for (const doc of alvos) {
+    const dispositivo = doc.data() as Dispositivo;
+    const p256dh = dispositivo.keys?.p256dh;
+    const auth = dispositivo.keys?.auth;
+
+    // Inscrição sem as chaves de cifra é inservível — não há como montar o
+    // payload criptografado. Descarta em vez de tentar e falhar todo ciclo.
+    if (!dispositivo.endpoint || !p256dh || !auth) {
+      descartar.add(doc.id);
+      erros.push('inscricao-incompleta');
+      continue;
     }
-    return atual;
-  };
 
-  for (const id of descartar) {
-    // Marca inativo em vez de apagar: preserva o histórico de saúde do
-    // dispositivo para diagnóstico, e evita recriar o doc do zero se o
-    // mesmo token voltar a ser salvo pelo cliente antes de expirar de vez.
-    paraDispositivo(id).status = 'inativo';
-  }
+    /*
+     * O `dispositivoId` viaja no payload para o Service Worker poder dizer
+     * "fui eu que recebi" sem que o endpoint (credencial) volte pela rede.
+     */
+    const payload = JSON.stringify({
+      title: titulo,
+      body: corpo,
+      tag: `dosecerta_${enviadoEm}`,
+      data: { url: '/', uid, dispositivoId: doc.id, enviadoEm: String(enviadoEm) },
+    });
 
-  /*
-   * O carimbo de envio é gravado no servidor, no momento do envio — nunca
-   * dependendo do aparelho responder. Enquanto ele dependia disso, um push
-   * que o dispositivo nunca recebia deixava os dois campos vazios e o
-   * diagnóstico dizia "enviado: nunca" mesmo tendo enviado com sucesso.
-   */
-  if (resposta.successCount > 0) {
-    atualizacaoUsuario.ultimoPushEnviadoEm = Timestamp.fromMillis(enviadoEm);
-  }
-
-  /*
-   * Contador por dispositivo: sobe a cada envio aceito, e o recebimento
-   * confirmado zera. É ele que denuncia o fantasma.
-   */
-  resposta.responses.forEach((r, i) => {
-    const id = ids[i];
-    if (!r.success || descartar.has(id)) return;
-    const atual = paraDispositivo(id);
-    atual.ultimoEnvioEm = Timestamp.fromMillis(enviadoEm);
-    atual.enviosSemConfirmacao = FieldValue.increment(1);
-  });
-
-  /*
-   * A poda mudou a contagem de dispositivos ativos — mantém o campo
-   * agregado no doc raiz em dia, é ele que sustenta a query indexada de
-   * `usuariosComNotificacoes` sem exigir leitura da subcoleção.
-   */
-  if (descartar.size > 0) {
-    atualizacaoUsuario.totalDispositivosAtivos = restantes.length;
-    // A poda esvaziou tudo: tira este usuário da query indexada já na
-    // próxima rotina, em vez de esperar o próximo ciclo achar o early
-    // return no topo desta função.
-    if (restantes.length === 0) {
-      atualizacaoUsuario.notificacoesAtivas = false;
+    try {
+      await webpush.sendNotification(
+        { endpoint: dispositivo.endpoint, keys: { p256dh, auth } },
+        payload,
+        // TTL de 24h: se o aparelho estiver offline agora, o push service
+        // continua tentando entregar quando ele voltar, em vez de descartar.
+        { TTL: 86400, urgency: 'high' },
+      );
+      enviados += 1;
+    } catch (falha) {
+      const status = (falha as { statusCode?: number })?.statusCode;
+      /*
+       * 404/410 é o push service afirmando que esta inscrição não existe
+       * mais. É definitivo — diferente do FCM, não há ambiguidade a resolver
+       * por heurística.
+       */
+      if (status === 404 || status === 410) {
+        descartar.add(doc.id);
+      }
+      erros.push(String(status ?? 'desconhecido'));
     }
   }
 
+  /*
+   * Um único `batch` por usuário: poda, carimbo de envio por dispositivo e os
+   * agregados do doc raiz saem juntos ou não saem. Um `batch` não aceita dois
+   * `update` sobre o mesmo documento, então cada doc acumula suas mudanças
+   * antes de entrar no lote.
+   */
   const lote = db.batch();
   let mudou = false;
 
-  for (const [id, dados] of atualizacoesPorDispositivo) {
-    lote.update(colecaoDispositivos(uid).doc(id), dados);
+  for (const id of descartar) {
+    // Inativa em vez de apagar: preserva o histórico do dispositivo para
+    // diagnóstico e evita recriar o doc do zero se o mesmo navegador voltar.
+    lote.update(colecaoDispositivos(uid).doc(id), { status: 'inativo' });
     mudou = true;
+  }
+
+  for (const doc of alvos) {
+    if (descartar.has(doc.id)) continue;
+    lote.update(colecaoDispositivos(uid).doc(doc.id), {
+      ultimoEnvioEm: Timestamp.fromMillis(enviadoEm),
+    });
+    mudou = true;
+  }
+
+  const atualizacaoUsuario: Record<string, unknown> = {};
+  /*
+   * O carimbo de envio é gravado no servidor, no momento do envio — nunca
+   * dependendo de o aparelho responder. Enquanto dependia, um push que o
+   * dispositivo nunca recebia deixava o campo vazio e o diagnóstico dizia
+   * "enviado: nunca" mesmo tendo enviado com sucesso.
+   */
+  if (enviados > 0) {
+    atualizacaoUsuario.ultimoPushEnviadoEm = Timestamp.fromMillis(enviadoEm);
+  }
+  if (descartar.size > 0) {
+    const restantes = dispositivos.length - descartar.size;
+    atualizacaoUsuario.totalDispositivosAtivos = restantes;
+    // A poda esvaziou tudo: tira este usuário da query indexada já na próxima
+    // rotina, em vez de esperar o early return do topo desta função.
+    if (restantes <= 0) atualizacaoUsuario.notificacoesAtivas = false;
   }
   if (Object.keys(atualizacaoUsuario).length > 0) {
     lote.update(docUsuario, atualizacaoUsuario);
     mudou = true;
   }
 
-  if (mudou) {
-    await lote.commit();
-  }
+  if (mudou) await lote.commit();
 
-  // Só contagens e códigos de erro — o token em si nunca vai para o log.
+  // Só contagens e códigos — endpoint e chaves nunca vão para o log.
   console.log(
     '[enviarParaUsuario]',
     JSON.stringify({
       uid,
-      tokens: tokens.length,
-      enviados: resposta.successCount,
+      dispositivos: dispositivos.length,
+      enviados,
       removidos: descartar.size,
-      erros: resposta.responses.filter((r) => !r.success).map((r) => r.error?.code ?? 'desconhecido'),
+      erros,
     }),
   );
 
-  return resposta.successCount;
-}
-
-function ehTokenInvalido(codigo: string | undefined): boolean {
-  return (
-    codigo === 'messaging/registration-token-not-registered' ||
-    codigo === 'messaging/invalid-registration-token'
-  );
+  return enviados;
 }
 
 function temDispositivosAtivos(valor: unknown): boolean {
@@ -548,7 +503,7 @@ function comoData(valor: unknown): Date | null {
  * Dispara uma notificação de teste imediata para o usuário autenticado —
  * usada pelo botão "Testar Notificação" em Ajustes > Lembretes.
  */
-export const testarNotificacao = onCall({ region: REGIAO, cors: true }, async (request) => {
+export const testarNotificacao = onCall({ ...OPCOES_ENVIO, cors: true }, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'É necessário estar logado.');
   }
@@ -563,9 +518,9 @@ export const testarNotificacao = onCall({ region: REGIAO, cors: true }, async (r
   } catch (falha) {
     // Ferramenta de diagnóstico: vale mais mostrar o erro real pro usuário
     // aqui do que nas rotinas automáticas, onde isso viraria ruído.
-    console.error('[testarNotificacao] falha ao enviar via FCM', request.auth.uid, falha);
+    console.error('[testarNotificacao] falha ao enviar o push', request.auth.uid, falha);
     const detalhe = falha instanceof Error ? falha.message : String(falha);
-    throw new HttpsError('internal', `Falha ao enviar pelo FCM: ${detalhe}`);
+    throw new HttpsError('internal', `Falha ao enviar o push: ${detalhe}`);
   }
 
   if (enviados === 0) {
@@ -584,7 +539,7 @@ export const testarNotificacao = onCall({ region: REGIAO, cors: true }, async (r
  * tem aplicação prevista para hoje e ainda não foi notificado hoje.
  */
 export const lembreteAplicacao = onSchedule(
-  { schedule: '0 8 * * *', timeZone: FUSO, region: REGIAO },
+  { schedule: '0 8 * * *', timeZone: FUSO, ...OPCOES_ENVIO },
   async () => {
     const agora = new Date();
     if (!(await adquirirLock('lembreteAplicacao', agora))) return;
@@ -641,7 +596,7 @@ export const lembreteAplicacao = onSchedule(
  * Diariamente às 10:00: quem registrou sintoma ontem recebe um acompanhamento.
  */
 export const acompanhamentoSintoma = onSchedule(
-  { schedule: '0 10 * * *', timeZone: FUSO, region: REGIAO },
+  { schedule: '0 10 * * *', timeZone: FUSO, ...OPCOES_ENVIO },
   async () => {
     if (!(await adquirirLock('acompanhamentoSintoma', new Date()))) return;
 
@@ -737,7 +692,7 @@ async function totalHidratacaoHoje(userRef: FirebaseFirestore.DocumentReference)
  * empurrão. Não dispara para quem já bateu a meta (condição `< 50%` já cobre).
  */
 export const hidratacaoMetadeDia = onSchedule(
-  { schedule: '0 15 * * *', timeZone: FUSO, region: REGIAO },
+  { schedule: '0 15 * * *', timeZone: FUSO, ...OPCOES_ENVIO },
   async () => {
     if (!(await adquirirLock('hidratacaoMetadeDia', new Date()))) return;
 
@@ -782,7 +737,7 @@ export const hidratacaoMetadeDia = onSchedule(
  * ou está abaixo de 50% (já coberto pelo aviso das 15h) não recebe nada.
  */
 export const hidratacaoRetaFinal = onSchedule(
-  { schedule: '0 19 * * *', timeZone: FUSO, region: REGIAO },
+  { schedule: '0 19 * * *', timeZone: FUSO, ...OPCOES_ENVIO },
   async () => {
     if (!(await adquirirLock('hidratacaoRetaFinal', new Date()))) return;
 
@@ -913,7 +868,7 @@ async function consumoNutricaoHoje(
  * meta do dia recebe um empurrão para um lanche proteico.
  */
 export const nutricaoAlertaTarde = onSchedule(
-  { schedule: '0 16 * * *', timeZone: FUSO, region: REGIAO },
+  { schedule: '0 16 * * *', timeZone: FUSO, ...OPCOES_ENVIO },
   async () => {
     if (!(await adquirirLock('nutricaoAlertaTarde', new Date()))) return;
 
@@ -966,7 +921,7 @@ export const nutricaoAlertaTarde = onSchedule(
  * abaixo do piso de segurança absoluto (1200kcal), independente da meta.
  */
 export const nutricaoRetaFinal = onSchedule(
-  { schedule: '0 20 * * *', timeZone: FUSO, region: REGIAO },
+  { schedule: '0 20 * * *', timeZone: FUSO, ...OPCOES_ENVIO },
   async () => {
     if (!(await adquirirLock('nutricaoRetaFinal', new Date()))) return;
 
@@ -1021,7 +976,7 @@ const SEMANA_MS = 7 * 24 * 60 * 60 * 1000;
  * registro de peso nos últimos 7 dias recebe um lembrete de check-in.
  */
 export const engajamentoRotina = onSchedule(
-  { schedule: '0 18 * * 5', timeZone: FUSO, region: REGIAO },
+  { schedule: '0 18 * * 5', timeZone: FUSO, ...OPCOES_ENVIO },
   async () => {
     if (!(await adquirirLock('engajamentoRotina', new Date()))) return;
 
@@ -1393,7 +1348,6 @@ export const confirmarRecebimentoPush = onRequest({ region: REGIAO, cors: true }
     if (typeof dispositivoId === 'string' && /^[0-9a-f]{20}$/.test(dispositivoId)) {
       await colecaoDispositivos(uid).doc(dispositivoId).update({
         ultimoRecebimentoEm: agora,
-        enviosSemConfirmacao: 0,
       });
     }
 

@@ -1,32 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { deleteToken, getToken } from 'firebase/messaging';
-import { getMessagingCliente } from '@/lib/firebase';
-import { confirmarTokenFcmSalvo, removerTokenFcm, salvarTokenFcm } from '@/lib/firestore';
+import { confirmarInscricaoSalva, removerInscricaoPush, salvarInscricaoPush } from '@/lib/firestore';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { detectarIOS } from '@/features/auth/sessao';
 import { useAmbiente } from '@/lib/useAmbiente';
+import { cancelarInscricao, obterInscricao, suportaPush } from './push';
 
 const MENSAGEM_NEGADA = 'Você negou a permissão de notificações. Habilite pelas configurações do navegador.';
 
-// Escopo próprio (fora de '/'), obrigatório aqui: o app já registra outro
-// service worker em '/' (Workbox, via vite-plugin-pwa) para cache/offline.
-// Registrar o SW do FCM sem escopo dedicado faria as duas registrations
-// colidirem na mesma scope '/' — o navegador entrega o evento `push` só para
-// UM worker ativo por escopo, e não necessariamente para o nosso, então o
-// push chega no servidor mas nunca aparece pro usuário.
-const ESCOPO_SW_MENSAGENS = '/firebase-cloud-messaging-push-scope';
-
-async function registrarSWMensagens(): Promise<ServiceWorkerRegistration | null> {
-  if (!('serviceWorker' in navigator)) return null;
-  return navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: ESCOPO_SW_MENSAGENS });
-}
-
 /**
- * Pede permissão, obtém e persiste o token FCM do dispositivo (confirmando
- * a escrita no servidor, não só no cache local), e escuta mensagens em
- * primeiro plano. O registro do Service Worker de mensagens só acontece
- * aqui (não no boot do app), para não abrir um SW extra sem o usuário ter
- * pedido notificações.
+ * Pede permissão, cria e persiste a inscrição de Web Push deste navegador,
+ * confirmando a escrita no servidor e não só no cache local.
+ *
+ * A inscrição nasce do Service Worker RAIZ (ver `obterInscricao` em
+ * `./push.ts`), o mesmo que controla o app — nenhum worker extra é registrado
+ * aqui. É essa propriedade que faz o iOS entregar com o app encerrado.
  */
 export function useNotificacoes() {
   const { usuario } = useAuth();
@@ -51,42 +38,32 @@ export function useNotificacoes() {
   const [erro, setErro] = useState<string | null>(null);
   const [resetando, setResetando] = useState(false);
   // Guardado à parte do estado de React de propósito: só serve pro "Reset
-  // Total" saber qual string remover do Firestore, não precisa re-renderizar
+  // Total" saber qual registro remover do Firestore, não precisa re-renderizar
   // nada quando muda.
-  const ultimoTokenRef = useRef<string | null>(null);
+  const ultimoEndpointRef = useRef<string | null>(null);
 
-  // Núcleo comum de "pegar o token do dispositivo, salvar e confirmar no
-  // servidor" — usado tanto pelo clique manual quanto pelo recheck do mount.
+  // Núcleo comum de "criar a inscrição, salvar e confirmar no servidor" —
+  // usado tanto pelo clique manual quanto pelos rechecks automáticos.
   // Lança um erro específico em cada etapa em vez de só retornar `false`:
   // o objetivo é a UI sempre conseguir mostrar o motivo real da falha
-  // (suporte, VAPID key, token, ou a escrita não ter chegado no servidor),
-  // nunca deixar isso morrer só no console.
+  // (suporte, chave VAPID, inscrição, ou a escrita não ter chegado no
+  // servidor), nunca deixar isso morrer só no console.
   const obterEPersistirToken = useCallback(async (): Promise<void> => {
     if (!usuario) throw new Error('Você precisa estar logado para habilitar notificações.');
 
-    const messaging = await getMessagingCliente();
-    const registro = await registrarSWMensagens();
-    if (!messaging || !registro) {
+    if (!suportaPush()) {
       throw new Error('Este navegador não suporta notificações push.');
     }
 
-    const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
-    if (!vapidKey) {
-      throw new Error('Configuração ausente: chave VAPID (VITE_FIREBASE_VAPID_KEY) não definida.');
-    }
+    const inscricao = await obterInscricao();
+    ultimoEndpointRef.current = inscricao.endpoint;
 
-    const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registro });
-    if (!token) {
-      throw new Error('Não foi possível obter o token de notificação deste dispositivo.');
-    }
-    ultimoTokenRef.current = token;
+    await salvarInscricaoPush(usuario.uid, inscricao);
 
-    await salvarTokenFcm(usuario.uid, token);
-
-    const confirmado = await confirmarTokenFcmSalvo(usuario.uid, token);
+    const confirmado = await confirmarInscricaoSalva(usuario.uid, inscricao.endpoint);
     if (!confirmado) {
       throw new Error(
-        'O token foi gerado, mas não foi confirmado no servidor. Verifique sua conexão e tente novamente.',
+        'A inscrição foi criada, mas não foi confirmada no servidor. Verifique sua conexão e tente novamente.',
       );
     }
 
@@ -127,13 +104,12 @@ export function useNotificacoes() {
 
   /*
    * O mesmo recheck acima, mas disparado ao voltar ao primeiro plano — não só
-   * no mount. Tokens FCM morrem silenciosamente (troca de dispositivo, app
-   * reinstalado, o próprio SO revogando o registro) sem nenhum evento que
-   * avise o app, e em PWA trocar de app no celular não recarrega a página.
-   * Sem isto, um token morto só seria detectado se a pessoa fechasse e
-   * reabrisse o app do zero — na prática, nunca. Foi assim que dois usuários
-   * pararam de receber lembretes: o token expirou entre uma abertura e
-   * outra, e nada revalidava até o próximo mount.
+   * no mount. Uma inscrição de push pode morrer silenciosamente (troca de
+   * dispositivo, app reinstalado, o próprio SO revogando o registro) sem
+   * nenhum evento que avise o app, e em PWA trocar de app no celular não
+   * recarrega a página. Sem isto, uma inscrição morta só seria detectada se a
+   * pessoa fechasse e reabrisse o app do zero — na prática, nunca. Foi assim
+   * que dois usuários pararam de receber lembretes.
    */
   useEffect(() => {
     if (!usuario || precisaInstalar) return;
@@ -153,10 +129,9 @@ export function useNotificacoes() {
 
   /*
    * Mesmo recheck, mas em intervalo fixo enquanto o app fica aberto em
-   * primeiro plano — não só nas bordas de mount/volta ao app. No iOS, manter
-   * a aba/PWA em uso parece ser o que mantém a inscrição de push "quente" no
-   * WebKit; uma sessão longa sem nenhuma interação com o SW não teria motivo
-   * pra revalidar nada até o usuário sair e voltar. Silencioso de propósito:
+   * primeiro plano — não só nas bordas de mount/volta ao app. Uma sessão
+   * longa sem nenhuma interação não teria motivo pra revalidar a inscrição
+   * até o usuário sair e voltar. Silencioso de propósito:
    * mesmo tratamento de erro do recheck de `visibilitychange` (só console),
    * sem tocar em nenhum estado visível — o botão "Sincronizar Dispositivo"
    * continua sendo o único ponto com feedback na tela.
@@ -207,39 +182,43 @@ export function useNotificacoes() {
   }, [usuario, precisaInstalar, obterEPersistirToken]);
 
   // "Reset Total": limpeza profunda pra quando o IndexedDB/Service Worker
-  // local fica com estado corrompido e nem `deleteToken`/novo `getToken`
   // simples resolvem. Cada etapa é best-effort (nunca deixa uma falha
   // isolada impedir as demais) — o objetivo é sair do jeito mais limpo
   // possível antes do reload forçado.
+  // "Reset de Notificações": limpeza profunda pra quando a inscrição local
+  // fica em estado inconsistente. Cancela a inscrição deste navegador e apaga o
+  // registro correspondente no Firestore. Cada etapa é best-effort (uma falha
+  // isolada nunca impede as demais).
+  //
+  // A versão anterior chamava `getRegistrations()` e desregistrava TODOS os
+  // service workers, incluindo o do próprio app — e deixava o registro no
+  // Firestore. O resultado era o pior cenário possível: o servidor seguia
+  // enviando, o provedor aceitava, e não existia mais worker nenhum do outro
+  // lado para exibir. Nunca desregistre o worker aqui; ele é o dono da
+  // inscrição e quem serve o app offline.
   const resetarNotificacoes = useCallback(async () => {
     setResetando(true);
     setErro(null);
     try {
+      let endpoint: string | null = null;
       try {
-        const messaging = await getMessagingCliente();
-        if (messaging) await deleteToken(messaging);
+        endpoint = await cancelarInscricao();
       } catch (falha) {
-        console.warn('[DoseCerta] reset: falha ao apagar token local via deleteToken', falha);
+        console.warn('[DoseCerta] reset: falha ao cancelar a inscrição no navegador', falha);
       }
 
+      // Cai para o endpoint memorizado se o navegador já não tiver mais a
+      // inscrição — sem isso o documento ficaria órfão no Firestore.
+      const alvo = endpoint ?? ultimoEndpointRef.current;
       try {
-        if ('serviceWorker' in navigator) {
-          const registros = await navigator.serviceWorker.getRegistrations();
-          await Promise.all(registros.map((registro) => registro.unregister()));
+        if (usuario && alvo) {
+          await removerInscricaoPush(usuario.uid, alvo);
         }
       } catch (falha) {
-        console.warn('[DoseCerta] reset: falha ao desregistrar service workers', falha);
+        console.warn('[DoseCerta] reset: falha ao remover a inscrição do Firestore', falha);
       }
 
-      try {
-        if (usuario && ultimoTokenRef.current) {
-          await removerTokenFcm(usuario.uid, ultimoTokenRef.current);
-        }
-      } catch (falha) {
-        console.warn('[DoseCerta] reset: falha ao remover token do Firestore', falha);
-      }
-
-      ultimoTokenRef.current = null;
+      ultimoEndpointRef.current = null;
       setTokenConfirmado(false);
     } finally {
       setResetando(false);

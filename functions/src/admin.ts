@@ -1,9 +1,9 @@
 import { createHash, randomInt } from 'node:crypto';
 import { getAuth } from 'firebase-admin/auth';
-import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
-import { enviarParaUsuario, idDoToken, usuariosComNotificacoes } from './notificacoes.js';
+import { OPCOES_ENVIO, enviarParaUsuario, usuariosComNotificacoes } from './notificacoes.js';
 
 const REGIAO = 'southamerica-east1';
 const REMETENTE = 'Dose Certa-AI <suporte@notificacoes.codehatch.com.br>';
@@ -260,9 +260,8 @@ type UsuarioPainel = {
    * Detalhe por dispositivo. A contagem agregada acima diz "tem aparelho
    * registrado", mas não distingue um registro vivo de um obsoleto que o FCM
    * ainda aceita — e é justamente esse o caso que gera sucesso falso nas
-   * rotinas. `enviosSemConfirmacao` alto com `ultimoRecebimentoEm` velho é a
-   * assinatura do fantasma, e sem isto na tela o diagnóstico dependia de
-   * cruzar log de function com o aparelho da pessoa na mão.
+   * rotinas. Ver a plataforma e o último recebimento de cada inscrição é o
+   * que permite diagnosticar sem depender do aparelho da pessoa na mão.
    */
   dispositivos: DispositivoPainel[];
 };
@@ -273,7 +272,6 @@ type DispositivoPainel = {
   plataforma: string | null;
   ultimoEnvioEm: string | null;
   ultimoRecebimentoEm: string | null;
-  enviosSemConfirmacao: number;
 };
 
 export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async (request) => {
@@ -317,7 +315,6 @@ export const adminListarUsuarios = onCall({ region: REGIAO, cors: true }, async 
         d.ultimoRecebimentoEm instanceof Timestamp
           ? d.ultimoRecebimentoEm.toDate().toISOString()
           : null,
-      enviosSemConfirmacao: Number(d.enviosSemConfirmacao ?? 0),
     });
     dispositivosPorUid.set(uid, lista);
   }
@@ -440,7 +437,7 @@ export const adminMetricas = onCall({ region: REGIAO, cors: true }, async (reque
   return { totalUsuarios: total, totalAssinantes: 0 };
 });
 
-export const adminEnviarBroadcast = onCall({ region: REGIAO, cors: true }, async (request) => {
+export const adminEnviarBroadcast = onCall({ ...OPCOES_ENVIO, cors: true }, async (request) => {
   exigirAdmin(request);
 
   const { titulo, corpo } = request.data as { titulo?: string; corpo?: string };
@@ -490,7 +487,7 @@ type ResultadoEnvioTeste = {
  * o mesmo `enviarParaUsuario` das rotinas agendadas — um teste que não exercita
  * o caminho real não prova nada.
  */
-export const adminEnviarPushTeste = onCall({ region: REGIAO, cors: true }, async (request) => {
+export const adminEnviarPushTeste = onCall({ ...OPCOES_ENVIO, cors: true }, async (request) => {
   exigirAdmin(request);
 
   const { titulo, corpo, uids, email } = request.data as {
@@ -621,117 +618,6 @@ export const adminRessincronizarNotificacoes = onCall({ region: REGIAO, cors: tr
   return { totalUsuarios: todos.size, atualizados };
 });
 
-type ResumoMigracaoDispositivos = {
-  totalUsuarios: number;
-  usuariosMigrados: number;
-  dispositivosCriados: number;
-  usuariosSemToken: number;
-  arraysAntigosApagados: number;
-  falhas: { uid: string; erro: string }[];
-};
-
-/**
- * Migra o modelo antigo (`fcmTokens` array + mapa `saudeTokens` no doc do
- * usuário) para a subcoleção `users/{uid}/dispositivos/{dispositivoId}`.
- *
- * À prova da falha que causou o apagão das 15:00: naquele caso, um backfill
- * anterior deixou `notificacoesAtivas` sem gravar em usuários existentes, e a
- * query indexada de `usuariosComNotificacoes` — corretamente — não os
- * enxergou. Aqui, os documentos de dispositivo e os campos agregados no doc
- * raiz (`notificacoesAtivas`, `totalDispositivosAtivos`) saem no MESMO
- * `batch` por usuário: nunca ficam dessincronizados entre si, mesmo se a
- * function inteira cair no meio da varredura.
- *
- * Todo write é `set`/`merge` com IDs determinísticos (o mesmo hash de token
- * já usado em produção) — reexecutar este script é seguro mesmo depois de
- * uma falha parcial: usuários já migrados são simplesmente reescritos com os
- * mesmos valores.
- *
- * `apagarArraysAntigos` fica de fora por padrão de propósito: só depois de
- * validar o modelo novo (painel mostrando as contagens certas, um envio de
- * teste chegando) é que faz sentido rodar de novo com a flag para limpar
- * `fcmTokens`/`saudeTokens`.
- */
-export const adminMigrarDispositivos = onCall({ region: REGIAO, cors: true }, async (request) => {
-  exigirAdmin(request);
-
-  const { apagarArraysAntigos } = (request.data ?? {}) as { apagarArraysAntigos?: boolean };
-
-  const db = getFirestore();
-  const todos = await db.collection('users').get();
-
-  const resumo: ResumoMigracaoDispositivos = {
-    totalUsuarios: todos.size,
-    usuariosMigrados: 0,
-    dispositivosCriados: 0,
-    usuariosSemToken: 0,
-    arraysAntigosApagados: 0,
-    falhas: [],
-  };
-
-  for (const doc of todos.docs) {
-    try {
-      const dados = doc.data();
-      const tokens = Array.isArray(dados.fcmTokens) ? (dados.fcmTokens as string[]) : [];
-      const saudeTokens = (dados.saudeTokens ?? {}) as Record<
-        string,
-        { ultimoEnvioEm?: unknown; ultimoRecebimentoEm?: unknown; enviosSemConfirmacao?: number }
-      >;
-
-      const lote = db.batch();
-
-      if (tokens.length === 0) {
-        if (dados.notificacoesAtivas !== false || dados.totalDispositivosAtivos !== 0) {
-          lote.update(doc.ref, { notificacoesAtivas: false, totalDispositivosAtivos: 0 });
-          await lote.commit();
-        }
-        resumo.usuariosSemToken += 1;
-        continue;
-      }
-
-      for (const token of tokens) {
-        const id = idDoToken(token);
-        const saude = saudeTokens[id] ?? {};
-        lote.set(
-          doc.ref.collection('dispositivos').doc(id),
-          {
-            token,
-            status: 'ativo',
-            plataforma: 'desconhecida',
-            criadoEm: FieldValue.serverTimestamp(),
-            ultimoEnvioEm: saude.ultimoEnvioEm ?? null,
-            ultimoRecebimentoEm: saude.ultimoRecebimentoEm ?? null,
-            enviosSemConfirmacao: saude.enviosSemConfirmacao ?? 0,
-          },
-          { merge: true },
-        );
-        resumo.dispositivosCriados += 1;
-      }
-
-      // Atômico com os documentos de dispositivo acima: a flag nunca fica
-      // gravada sem os dispositivos que a sustentam, nem o contrário.
-      lote.update(doc.ref, { notificacoesAtivas: true, totalDispositivosAtivos: tokens.length });
-
-      if (apagarArraysAntigos) {
-        lote.update(doc.ref, {
-          fcmTokens: FieldValue.delete(),
-          saudeTokens: FieldValue.delete(),
-        });
-        resumo.arraysAntigosApagados += 1;
-      }
-
-      await lote.commit();
-      resumo.usuariosMigrados += 1;
-    } catch (falha) {
-      console.error('[adminMigrarDispositivos] falha ao migrar usuário', doc.id, falha);
-      const detalhe = falha instanceof Error ? falha.message : String(falha);
-      resumo.falhas.push({ uid: doc.id, erro: detalhe });
-    }
-  }
-
-  return resumo;
-});
-
 /**
  * Desativa TODOS os dispositivos de um usuário, forçando o app a registrar um
  * token novo do zero no próximo uso.
@@ -744,8 +630,7 @@ export const adminMigrarDispositivos = onCall({ region: REGIAO, cors: true }, as
  *
  * Não há perda: `useNotificacoes` no cliente revalida o token no mount, ao
  * voltar ao primeiro plano e em intervalo fixo, e `salvarTokenFcm` recria o
- * dispositivo já com `enviosSemConfirmacao` zerado e reativa
- * `notificacoesAtivas`.
+ * dispositivo do zero e reativa `notificacoesAtivas`.
  */
 export const adminForcarRerregistroDispositivos = onCall(
   { region: REGIAO, cors: true },

@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { getDb } from './firebase';
 import { detectarAndroid, detectarIOS } from '@/features/auth/sessao';
+import type { InscricaoPush } from '@/features/notificacoes/push';
 import type {
   Agenda,
   Aplicacao,
@@ -451,14 +452,15 @@ export const refUsuario = (uid: string) =>
   doc(getDb(), 'users', uid).withConverter(conversorCampoUsuario);
 
 /**
- * Mesmo hash usado no servidor (`idDoToken` em `functions/src/notificacoes.ts`)
- * para nomear o documento do dispositivo — `sha256(token).slice(0,20)`. Aqui
- * via Web Crypto (`node:crypto` não existe no browser), mas o resultado é
- * byte a byte o mesmo hash, então cliente e servidor sempre concordam sobre
- * qual documento pertence a qual token.
+ * Mesmo hash usado no servidor (`idDoEndpoint` em
+ * `functions/src/notificacoes.ts`) para nomear o documento do dispositivo —
+ * `sha256(endpoint).slice(0,20)`. Aqui via Web Crypto (`node:crypto` não
+ * existe no browser), mas o resultado é byte a byte o mesmo hash, então
+ * cliente e servidor sempre concordam sobre qual documento pertence a qual
+ * inscrição.
  */
-async function idDoTokenCliente(token: string): Promise<string> {
-  const bytes = new TextEncoder().encode(token);
+async function idDoEndpointCliente(endpoint: string): Promise<string> {
+  const bytes = new TextEncoder().encode(endpoint);
   const hash = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(hash))
     .map((b) => b.toString(16).padStart(2, '0'))
@@ -476,7 +478,7 @@ const docDispositivo = (uid: string, dispositivoId: string) =>
   doc(getDb(), 'users', uid, 'dispositivos', dispositivoId);
 
 /**
- * Registra o token FCM do dispositivo atual em
+ * Registra a inscrição de Web Push deste navegador em
  * `users/{uid}/dispositivos/{dispositivoId}` e mantém `notificacoesAtivas` /
  * `totalDispositivosAtivos` no doc raiz — os dois são o que a query indexada
  * de `usuariosComNotificacoes` (servidor) usa para encontrar candidatos, e
@@ -485,16 +487,20 @@ const docDispositivo = (uid: string, dispositivoId: string) =>
  * como só `enviarParaUsuario` corrige esse campo, e ele só roda para quem já
  * é candidato, o usuário ficaria excluído para sempre.
  *
+ * `endpoint` e `keys` juntos são o que o servidor precisa para cifrar o envio
+ * (Web Push é criptografado ponta a ponta com as chaves do navegador); um sem
+ * o outro não envia nada.
+ *
  * Por isso é uma `transaction`, não um `writeBatch`: precisa LER se o
  * dispositivo já estava ativo antes de decidir se incrementa o contador.
  * `set({...}, {merge:true})` no id determinístico evita duplicar o mesmo
- * dispositivo a cada `getToken()` (o SDK costuma devolver o mesmo token
- * enquanto ele for válido); sem essa checagem, cada recheck automático do
- * app (mount, `visibilitychange`) incrementaria o contador de novo,
+ * dispositivo a cada revalidação (o navegador devolve a mesma inscrição
+ * enquanto ela for válida); sem essa checagem, cada recheck automático do app
+ * (mount, `visibilitychange`, intervalo) incrementaria o contador de novo,
  * mentindo sobre quantos dispositivos a conta realmente tem.
  */
-export async function salvarTokenFcm(uid: string, token: string): Promise<void> {
-  const dispositivoId = await idDoTokenCliente(token);
+export async function salvarInscricaoPush(uid: string, inscricao: InscricaoPush): Promise<void> {
+  const dispositivoId = await idDoEndpointCliente(inscricao.endpoint);
   const refDispositivo = docDispositivo(uid, dispositivoId);
 
   await runTransaction(getDb(), async (tx) => {
@@ -504,21 +510,11 @@ export async function salvarTokenFcm(uid: string, token: string): Promise<void> 
     tx.set(
       refDispositivo,
       {
-        token,
+        endpoint: inscricao.endpoint,
+        keys: inscricao.keys,
         status: 'ativo',
         plataforma: plataformaAtual(),
         criadoEm: serverTimestamp(),
-        /*
-         * Zera o contador de silêncio só na REATIVAÇÃO (doc ausente ou que
-         * estava inativo). Um dispositivo que o servidor podou e que o
-         * cliente re-registra precisa começar do zero, senão volta com o
-         * contador já estourado e é podado de novo no primeiro envio — um
-         * flapping infinito. Já um dispositivo continuamente ativo não pode
-         * ter isso zerado: o contador é justamente o que denuncia o fantasma,
-         * e o app estar aberto não prova que o Service Worker acorda para
-         * push (que é exatamente o caso que o fantasma representa).
-         */
-        ...(jaEstavaAtivo ? {} : { enviosSemConfirmacao: 0 }),
       },
       { merge: true },
     );
@@ -535,16 +531,17 @@ export async function salvarTokenFcm(uid: string, token: string): Promise<void> 
 }
 
 /**
- * Confirma no SERVIDOR (não no cache local) que o dispositivo foi salvo com
+ * Confirma no SERVIDOR (não no cache local) que a inscrição foi salva com
  * status ativo. O Firestore roda com persistência offline
- * (`persistentLocalCache` em `src/lib/firebase.ts`), então `salvarTokenFcm`
- * resolve assim que a escrita entra no cache local — não quando o servidor
- * confirma. Sem esse round-trip explícito, a UI pode marcar "habilitado" com
- * o token só na memória do dispositivo, enquanto a Cloud Function (que só
- * enxerga o servidor via Admin SDK) não encontra dispositivo nenhum.
+ * (`persistentLocalCache` em `src/lib/firebase.ts`), então
+ * `salvarInscricaoPush` resolve assim que a escrita entra no cache local —
+ * não quando o servidor confirma. Sem esse round-trip explícito, a UI pode
+ * marcar "habilitado" com a inscrição só na memória do dispositivo, enquanto
+ * a Cloud Function (que só enxerga o servidor via Admin SDK) não encontra
+ * dispositivo nenhum.
  */
-export async function confirmarTokenFcmSalvo(uid: string, token: string): Promise<boolean> {
-  const dispositivoId = await idDoTokenCliente(token);
+export async function confirmarInscricaoSalva(uid: string, endpoint: string): Promise<boolean> {
+  const dispositivoId = await idDoEndpointCliente(endpoint);
   const snap = await getDocFromServer(docDispositivo(uid, dispositivoId));
   return snap.exists() && snap.data()?.status === 'ativo';
 }
@@ -552,13 +549,13 @@ export async function confirmarTokenFcmSalvo(uid: string, token: string): Promis
 /**
  * Remove o documento do dispositivo atual — usado no "Reset de Notificações".
  * Decrementa `totalDispositivosAtivos` só se o dispositivo removido de fato
- * estava ativo, pela mesma razão da transação em `salvarTokenFcm`: esse
+ * estava ativo, pela mesma razão da transação em `salvarInscricaoPush`: esse
  * contador precisa continuar batendo com a realidade da subcoleção, senão
  * a conta pode ficar presa fora da varredura das rotinas (contador não pode
  * ficar negativo) ou continuar sendo contada com um dispositivo a mais.
  */
-export async function removerTokenFcm(uid: string, token: string): Promise<void> {
-  const dispositivoId = await idDoTokenCliente(token);
+export async function removerInscricaoPush(uid: string, endpoint: string): Promise<void> {
+  const dispositivoId = await idDoEndpointCliente(endpoint);
   const refDispositivo = docDispositivo(uid, dispositivoId);
 
   await runTransaction(getDb(), async (tx) => {

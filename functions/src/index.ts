@@ -33,7 +33,6 @@ export {
   adminEnviarBroadcast,
   adminEnviarPushTeste,
   adminRessincronizarNotificacoes,
-  adminMigrarDispositivos,
   adminForcarRerregistroDispositivos,
 } from './admin.js';
 export {

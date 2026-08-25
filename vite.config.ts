@@ -16,12 +16,25 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         /*
-         * O service worker de push não é asset do app: quem cuida do ciclo de
-         * vida dele é o navegador, ao registrá-lo. Deixá-lo no precache só
-         * guardaria uma cópia paralela que nunca é usada para servir o script
-         * e ainda mascara qual versão está de fato ativa.
+         * O handler de push entra DENTRO deste service worker, em vez de viver
+         * num worker próprio. É o ponto central da arquitetura de notificações,
+         * não uma escolha de organização: a inscrição de push pertence ao
+         * worker que a cria, e o iOS só entrega de forma confiável com o app
+         * encerrado quando esse worker é o mesmo que controla o PWA instalado
+         * (escopo `/`, que é o deste aqui). A versão anterior registrava um
+         * worker separado do FCM num escopo dedicado que nenhuma página
+         * navegava; ele funcionava com o app aberto (já estava vivo) e falhava
+         * com o app fechado, quando o iOS teria de acordar uma registration
+         * órfã.
          */
-        globIgnores: ['firebase-messaging-sw.js'],
+        importScripts: ['/push-sw.js'],
+        /*
+         * O script de push não é asset do app: ele é concatenado ao worker via
+         * `importScripts` acima. Deixá-lo no precache guardaria uma cópia
+         * paralela que nunca serve para nada e ainda mascara qual versão está
+         * de fato ativa.
+         */
+        globIgnores: ['push-sw.js'],
         navigateFallback: '/index.html',
         /*
          * `/__/auth/*` é o handler de login do Firebase, servido no nosso
