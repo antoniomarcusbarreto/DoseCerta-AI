@@ -124,3 +124,29 @@ export async function adminForcarRerregistroDispositivos(
   const resposta = await chamar({ uid });
   return resposta.data;
 }
+
+export type ResultadoEnvioTeste = {
+  uid: string;
+  email: string | null;
+  enviados: number;
+  erro?: string;
+};
+
+/**
+ * Disparo direcionado — endpoint separado do broadcast global. Aceita `uids`
+ * (seleção na tela de usuários) ou `email` (campo do dashboard). O retorno vem
+ * por alvo, e não agregado: `enviados: 0` é o resultado que mais interessa.
+ */
+export async function adminEnviarPushTeste(entrada: {
+  titulo: string;
+  corpo: string;
+  uids?: string[];
+  email?: string;
+}): Promise<{ resultados: ResultadoEnvioTeste[]; total: number }> {
+  const chamar = httpsCallable<
+    { titulo: string; corpo: string; uids?: string[]; email?: string },
+    { resultados: ResultadoEnvioTeste[]; total: number }
+  >(getFunctionsCliente(), 'adminEnviarPushTeste');
+  const resposta = await chamar(entrada);
+  return resposta.data;
+}

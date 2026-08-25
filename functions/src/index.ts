@@ -31,6 +31,7 @@ export {
   adminDefinirGratuidade,
   adminMetricas,
   adminEnviarBroadcast,
+  adminEnviarPushTeste,
   adminRessincronizarNotificacoes,
   adminMigrarDispositivos,
   adminForcarRerregistroDispositivos,

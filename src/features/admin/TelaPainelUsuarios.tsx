@@ -6,11 +6,13 @@ import {
   adminAlterarSenha,
   adminDefinirBloqueio,
   adminDefinirGratuidade,
+  adminEnviarPushTeste,
   adminForcarRerregistroDispositivos,
   adminListarUsuarios,
   adminMigrarDispositivos,
   adminRessincronizarNotificacoes,
   type DispositivoPainel,
+  type ResultadoEnvioTeste,
   type UsuarioPainel,
 } from './api';
 
@@ -20,6 +22,9 @@ import {
  * servidor (15), para o painel acusar o problema antes de a rotina agir.
  */
 const ENVIOS_SEM_CONFIRMACAO_SUSPEITO = 8;
+
+/** Espelha `MAX_ALVOS_TESTE` no servidor — aqui só para avisar antes da chamada. */
+const MAX_ALVOS_TESTE = 20;
 
 function ehFantasma(dispositivo: DispositivoPainel): boolean {
   return (
@@ -153,6 +158,264 @@ function ModalGratuidade({ usuario, onFechar, onSalvo }: { usuario: UsuarioPaine
   );
 }
 
+/*
+ * Disparo direcionado: os alvos vêm prontos de quem abriu o modal (uma linha da
+ * tabela ou a seleção por checkbox). Chama `adminEnviarPushTeste`, que exercita
+ * o mesmo caminho de envio das rotinas agendadas — inclusive a poda.
+ *
+ * O modal não fecha sozinho ao concluir: o resultado POR ALVO é o produto da
+ * ação. `0 dispositivo(s)` é o desfecho que mais importa ver (conta sem token
+ * ativo), e ele desapareceria num fechamento automático.
+ */
+function ModalEnvioTeste({
+  alvos,
+  onFechar,
+  onEnviado,
+}: {
+  alvos: UsuarioPainel[];
+  onFechar: () => void;
+  onEnviado: () => void;
+}) {
+  const [titulo, setTitulo] = useState('Teste de notificação');
+  const [corpo, setCorpo] = useState('Se você recebeu isso, o push está funcionando neste aparelho.');
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [resultados, setResultados] = useState<ResultadoEnvioTeste[] | null>(null);
+
+  async function enviar() {
+    if (!titulo.trim() || !corpo.trim()) {
+      setErro('Preencha título e mensagem.');
+      return;
+    }
+    setErro(null);
+    setEnviando(true);
+    try {
+      const resposta = await adminEnviarPushTeste({
+        titulo: titulo.trim(),
+        corpo: corpo.trim(),
+        uids: alvos.map((alvo) => alvo.uid),
+      });
+      setResultados(resposta.resultados);
+      onEnviado();
+    } catch {
+      setErro('Não foi possível enviar. Tente novamente.');
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 px-4">
+      <div
+        className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl p-5"
+        style={{ background: 'var(--surface-card)' }}
+      >
+        <h2 className="t-title text-ink">Enviar push de teste</h2>
+        <p className="t-label mt-1 text-ink-muted">
+          {alvos.length === 1
+            ? (alvos[0].email ?? alvos[0].uid)
+            : `${alvos.length} destinatário(s) selecionado(s)`}
+        </p>
+
+        {alvos.length > 1 ? (
+          <ul
+            className="mt-2 max-h-28 overflow-y-auto rounded-xl px-3 py-2"
+            style={{ background: 'var(--surface-sunken)' }}
+          >
+            {alvos.map((alvo) => (
+              <li key={alvo.uid} className="t-label text-ink-muted">
+                {alvo.email ?? alvo.uid}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        <div className="mt-4 space-y-3">
+          {erro ? <Alerta tom="danger" titulo={erro} /> : null}
+
+          {resultados ? (
+            <div>
+              <p className="t-label text-ink">Resultado</p>
+              <ul className="mt-1 space-y-1">
+                {resultados.map((resultado) => (
+                  <li
+                    key={resultado.uid}
+                    className="t-label"
+                    style={{ color: resultado.enviados > 0 ? 'var(--ok)' : 'var(--danger)' }}
+                  >
+                    {resultado.email ?? resultado.uid} — {resultado.erro ?? `${resultado.enviados} dispositivo(s)`}
+                  </li>
+                ))}
+              </ul>
+              <p className="t-caption mt-2 text-ink-muted">
+                O painel só mostra "Recebido" depois que o aparelho confirmar de fato.
+              </p>
+            </div>
+          ) : (
+            <>
+              <Field
+                rotulo="Título"
+                required
+                maxLength={80}
+                value={titulo}
+                onChange={(e) => setTitulo(e.target.value)}
+                autoFocus
+              />
+              <div className="flex flex-col">
+                <label htmlFor="corpo-teste" className="t-caption text-ink-muted">
+                  Mensagem
+                </label>
+                <textarea
+                  id="corpo-teste"
+                  required
+                  rows={3}
+                  maxLength={200}
+                  value={corpo}
+                  onChange={(e) => setCorpo(e.target.value)}
+                  className="mt-1.5 block w-full border px-4 py-2.5 t-body text-ink outline-none"
+                  style={{
+                    borderRadius: 'var(--r-field)',
+                    background: 'var(--surface-sunken)',
+                    borderColor: 'var(--border-hair)',
+                  }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onFechar} className="t-label px-4 py-2 text-ink-muted hover:text-ink">
+            {resultados ? 'Fechar' : 'Cancelar'}
+          </button>
+          {resultados ? null : (
+            <button
+              type="button"
+              onClick={() => void enviar()}
+              disabled={enviando}
+              className="rounded-full bg-emerald-600 px-5 py-2 t-label font-semibold text-white hover:bg-emerald-700 disabled:opacity-45"
+            >
+              {enviando ? 'Enviando…' : 'Enviar'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * Célula "Notificações". Fechada por padrão: como a poda nunca apaga um
+ * registro, só o marca como `inativo`, o histórico cresce para sempre e
+ * imprimi-lo inteiro em toda linha torna a tabela ilegível.
+ *
+ * O que NÃO pode ficar escondido é o sintoma: conta sem dispositivo e
+ * dispositivo fantasma continuam visíveis com a célula fechada — é para
+ * acusá-los que esta coluna existe.
+ */
+function CelulaNotificacoes({
+  usuario,
+  expandido,
+  onAlternar,
+}: {
+  usuario: UsuarioPainel;
+  expandido: boolean;
+  onAlternar: () => void;
+}) {
+  const ativos = usuario.dispositivos.filter((dispositivo) => dispositivo.status === 'ativo');
+  const inativos = usuario.dispositivos.length - ativos.length;
+  const fantasmas = ativos.filter(ehFantasma).length;
+  /*
+   * `usuario.tokens` é o agregado `totalDispositivosAtivos` do doc do usuário;
+   * `ativos` vem da subcoleção. Divergência entre os dois é justamente o que
+   * "Ressincronizar notificações" conserta — mostramos o maior para não exibir
+   * um falso "sem dispositivo" enquanto o agregado está atrasado.
+   */
+  const totalAtivos = Math.max(usuario.tokens, ativos.length);
+
+  // Ativos primeiro: o inativo é histórico, não é o que se está diagnosticando.
+  const ordenados = [...usuario.dispositivos].sort((a, b) =>
+    a.status === b.status ? 0 : a.status === 'ativo' ? -1 : 1,
+  );
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span
+          className="t-label rounded-full px-2.5 py-1"
+          style={{
+            background: totalAtivos > 0 ? 'var(--ok-soft)' : 'var(--danger-soft)',
+            color: totalAtivos > 0 ? 'var(--ok)' : 'var(--danger)',
+          }}
+        >
+          {totalAtivos > 0
+            ? `${totalAtivos} dispositivo${totalAtivos > 1 ? 's' : ''} ativo${totalAtivos > 1 ? 's' : ''}`
+            : 'Sem dispositivo'}
+        </span>
+        {fantasmas > 0 ? (
+          <span
+            className="t-label rounded-full px-2.5 py-1"
+            style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}
+          >
+            {fantasmas} sem confirmar
+          </span>
+        ) : null}
+      </div>
+
+      {usuario.dispositivos.length > 0 || usuario.ultimoPushEnviadoEm ? (
+        <button
+          type="button"
+          onClick={onAlternar}
+          aria-expanded={expandido}
+          className="t-label mt-1 text-ink-muted hover:text-ink hover:underline"
+        >
+          {expandido
+            ? 'Ocultar detalhes'
+            : `Ver detalhes${inativos > 0 ? ` (${inativos} inativo${inativos > 1 ? 's' : ''})` : ''}`}
+        </button>
+      ) : null}
+
+      {expandido ? (
+        <div className="mt-1">
+          <p className="t-label text-ink-muted">
+            Enviado: {formatarDataHora(usuario.ultimoPushEnviadoEm)}
+            <br />
+            Recebido: {formatarDataHora(usuario.ultimoPushRecebidoEm)}
+          </p>
+          {ordenados.length > 0 ? (
+            <ul className="mt-2 space-y-1">
+              {ordenados.map((dispositivo) => (
+                <li
+                  key={dispositivo.id}
+                  className="t-label text-ink-muted"
+                  style={{ opacity: dispositivo.status === 'ativo' ? 1 : 0.6 }}
+                >
+                  <span
+                    className="rounded-full px-2 py-0.5"
+                    style={{
+                      background: ehFantasma(dispositivo)
+                        ? 'var(--danger-soft)'
+                        : 'var(--surface-sunken)',
+                      color: ehFantasma(dispositivo) ? 'var(--danger)' : 'var(--ink-muted)',
+                    }}
+                  >
+                    {dispositivo.plataforma ?? 'desconhecida'} · {dispositivo.status}
+                    {dispositivo.enviosSemConfirmacao > 0
+                      ? ` · ${dispositivo.enviosSemConfirmacao} sem confirmar`
+                      : null}
+                  </span>
+                  <br />
+                  últ. recebido: {formatarDataHora(dispositivo.ultimoRecebimentoEm)}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export function TelaPainelUsuarios() {
   const [usuarios, setUsuarios] = useState<UsuarioPainel[]>([]);
   const [carregando, setCarregando] = useState(true);
@@ -162,6 +425,10 @@ export function TelaPainelUsuarios() {
 
   const [modalSenha, setModalSenha] = useState<UsuarioPainel | null>(null);
   const [modalGratuidade, setModalGratuidade] = useState<UsuarioPainel | null>(null);
+  const [alvosTeste, setAlvosTeste] = useState<UsuarioPainel[] | null>(null);
+
+  const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
 
   const [ressincronizando, setRessincronizando] = useState(false);
   const [resultadoRessincronizacao, setResultadoRessincronizacao] = useState<string | null>(null);
@@ -198,6 +465,54 @@ export function TelaPainelUsuarios() {
         usuario.displayName?.toLowerCase().includes(termo),
     );
   }, [usuarios, busca]);
+
+  /*
+   * Sai de `usuarios`, não de `usuariosFiltrados`: quem foi selecionado antes
+   * de digitar na busca continua valendo como destinatário — a seleção é a
+   * intenção do admin, o filtro é só uma lente sobre a tabela.
+   */
+  const usuariosSelecionados = useMemo(
+    () => usuarios.filter((usuario) => selecionados.has(usuario.uid)),
+    [usuarios, selecionados],
+  );
+
+  const todosFiltradosSelecionados =
+    usuariosFiltrados.length > 0 &&
+    usuariosFiltrados.every((usuario) => selecionados.has(usuario.uid));
+
+  function alternarExpandido(uid: string) {
+    setExpandidos((atual) => {
+      const proximo = new Set(atual);
+      if (proximo.has(uid)) proximo.delete(uid);
+      else proximo.add(uid);
+      return proximo;
+    });
+  }
+
+  function alternarSelecionado(uid: string) {
+    setSelecionados((atual) => {
+      const proximo = new Set(atual);
+      if (proximo.has(uid)) proximo.delete(uid);
+      else proximo.add(uid);
+      return proximo;
+    });
+  }
+
+  /*
+   * "Selecionar todos" age só sobre os FILTRADOS: com uma busca ativa, marcar
+   * a base inteira seria justamente a surpresa que o disparo direcionado
+   * existe para evitar.
+   */
+  function alternarTodosFiltrados() {
+    setSelecionados((atual) => {
+      const proximo = new Set(atual);
+      for (const usuario of usuariosFiltrados) {
+        if (todosFiltradosSelecionados) proximo.delete(usuario.uid);
+        else proximo.add(usuario.uid);
+      }
+      return proximo;
+    });
+  }
 
   async function alternarBloqueio(usuario: UsuarioPainel) {
     setAlterandoBloqueio(usuario.uid);
@@ -308,6 +623,8 @@ export function TelaPainelUsuarios() {
     }
   }
 
+  const bordaHair = { borderColor: 'var(--border-hair)' };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -317,7 +634,7 @@ export function TelaPainelUsuarios() {
           onClick={() => void migrarDispositivos()}
           disabled={migrando}
           className="t-label rounded-full border px-3 py-1.5 text-ink-muted disabled:opacity-50"
-          style={{ borderColor: 'var(--border-hair)' }}
+          style={bordaHair}
         >
           {migrando ? 'Migrando…' : 'Migrar para subcoleção de dispositivos'}
         </button>
@@ -327,7 +644,7 @@ export function TelaPainelUsuarios() {
             onClick={() => void apagarArraysAntigos()}
             disabled={migrando}
             className="t-label rounded-full border px-3 py-1.5 text-ink-muted disabled:opacity-50"
-            style={{ borderColor: 'var(--border-hair)' }}
+            style={bordaHair}
           >
             Apagar arrays antigos
           </button>
@@ -337,7 +654,7 @@ export function TelaPainelUsuarios() {
           onClick={() => void ressincronizarNotificacoes()}
           disabled={ressincronizando}
           className="t-label rounded-full border px-3 py-1.5 text-ink-muted disabled:opacity-50"
-          style={{ borderColor: 'var(--border-hair)' }}
+          style={bordaHair}
         >
           {ressincronizando ? 'Ressincronizando…' : 'Ressincronizar notificações'}
         </button>
@@ -355,6 +672,35 @@ export function TelaPainelUsuarios() {
       {resultadoMigracao ? <Alerta tom="ok" titulo={resultadoMigracao} /> : null}
       {resultadoRessincronizacao ? <Alerta tom="ok" titulo={resultadoRessincronizacao} /> : null}
 
+      {selecionados.size > 0 ? (
+        <div
+          className="flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3"
+          style={{ borderColor: 'var(--border-hair)', background: 'var(--surface-sunken)' }}
+        >
+          <span className="t-label text-ink">{selecionados.size} usuário(s) selecionado(s)</span>
+          <button
+            type="button"
+            onClick={() => setAlvosTeste(usuariosSelecionados)}
+            disabled={selecionados.size > MAX_ALVOS_TESTE}
+            className="rounded-full bg-emerald-600 px-4 py-1.5 t-label font-semibold text-white hover:bg-emerald-700 disabled:opacity-45"
+          >
+            Enviar push de teste
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelecionados(new Set())}
+            className="t-label text-ink-muted hover:text-ink hover:underline"
+          >
+            Limpar seleção
+          </button>
+          {selecionados.size > MAX_ALVOS_TESTE ? (
+            <span className="t-label" style={{ color: 'var(--danger)' }}>
+              Máximo de {MAX_ALVOS_TESTE} por disparo de teste.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
       <SheetCard>
         {carregando ? (
           <p className="t-body text-ink-muted">Carregando…</p>
@@ -365,22 +711,30 @@ export function TelaPainelUsuarios() {
             <table className="w-full text-left">
               <thead>
                 <tr className="t-caption text-ink-muted">
-                  <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
+                  <th className="border-b px-3 py-2 font-medium" style={bordaHair}>
+                    <input
+                      type="checkbox"
+                      checked={todosFiltradosSelecionados}
+                      onChange={alternarTodosFiltrados}
+                      aria-label="Selecionar todos os usuários listados"
+                    />
+                  </th>
+                  <th className="border-b px-3 py-2 font-medium" style={bordaHair}>
                     Usuário
                   </th>
-                  <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
+                  <th className="border-b px-3 py-2 font-medium" style={bordaHair}>
                     Criado em
                   </th>
-                  <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
+                  <th className="border-b px-3 py-2 font-medium" style={bordaHair}>
                     Gratuidade até
                   </th>
-                  <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
+                  <th className="border-b px-3 py-2 font-medium" style={bordaHair}>
                     Notificações
                   </th>
-                  <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
+                  <th className="border-b px-3 py-2 font-medium" style={bordaHair}>
                     Status
                   </th>
-                  <th className="border-b px-3 py-2 font-medium" style={{ borderColor: 'var(--border-hair)' }}>
+                  <th className="border-b px-3 py-2 font-medium" style={bordaHair}>
                     Ações
                   </th>
                 </tr>
@@ -388,66 +742,37 @@ export function TelaPainelUsuarios() {
               <tbody>
                 {usuariosFiltrados.map((usuario) => (
                   <tr key={usuario.uid} className="t-body text-ink">
-                    <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
+                    <td className="border-b px-3 py-2.5 align-top" style={bordaHair}>
+                      <input
+                        type="checkbox"
+                        checked={selecionados.has(usuario.uid)}
+                        onChange={() => alternarSelecionado(usuario.uid)}
+                        aria-label={'Selecionar ' + (usuario.email ?? usuario.uid)}
+                      />
+                    </td>
+                    <td className="border-b px-3 py-2.5 align-top" style={bordaHair}>
                       <p>{usuario.displayName ?? '—'}</p>
                       <p className="t-label text-ink-muted">{usuario.email ?? usuario.uid}</p>
                     </td>
-                    <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
+                    <td className="border-b px-3 py-2.5 align-top" style={bordaHair}>
                       {formatarData(usuario.criadoEm)}
                     </td>
-                    <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
+                    <td className="border-b px-3 py-2.5 align-top" style={bordaHair}>
                       {formatarData(usuario.freeTrialEndsAt)}
                     </td>
-                    <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
+                    <td className="border-b px-3 py-2.5 align-top" style={bordaHair}>
                       {/*
                         Sem dispositivo registrado a pessoa nunca recebe lembrete: as
                         rotinas agendadas iteram apenas quem tem token, então ela é
                         ignorada em silêncio, sem aparecer em nenhum contador de falha.
                       */}
-                      <span
-                        className="t-label rounded-full px-2.5 py-1"
-                        style={{
-                          background: usuario.tokens > 0 ? 'var(--ok-soft)' : 'var(--danger-soft)',
-                          color: usuario.tokens > 0 ? 'var(--ok)' : 'var(--danger)',
-                        }}
-                      >
-                        {usuario.tokens > 0
-                          ? `${usuario.tokens} dispositivo${usuario.tokens > 1 ? 's' : ''}`
-                          : 'Sem dispositivo'}
-                      </span>
-                      {usuario.tokens > 0 ? (
-                        <p className="t-label mt-1 text-ink-muted">
-                          Enviado: {formatarDataHora(usuario.ultimoPushEnviadoEm)}
-                          <br />
-                          Recebido: {formatarDataHora(usuario.ultimoPushRecebidoEm)}
-                        </p>
-                      ) : null}
-                      {usuario.dispositivos.length > 0 ? (
-                        <ul className="mt-2 space-y-1">
-                          {usuario.dispositivos.map((dispositivo) => (
-                            <li key={dispositivo.id} className="t-label text-ink-muted">
-                              <span
-                                className="rounded-full px-2 py-0.5"
-                                style={{
-                                  background: ehFantasma(dispositivo)
-                                    ? 'var(--danger-soft)'
-                                    : 'var(--surface-sunken)',
-                                  color: ehFantasma(dispositivo) ? 'var(--danger)' : 'var(--ink-muted)',
-                                }}
-                              >
-                                {dispositivo.plataforma ?? 'desconhecida'} · {dispositivo.status}
-                                {dispositivo.enviosSemConfirmacao > 0
-                                  ? ` · ${dispositivo.enviosSemConfirmacao} sem confirmar`
-                                  : null}
-                              </span>
-                              <br />
-                              últ. recebido: {formatarDataHora(dispositivo.ultimoRecebimentoEm)}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
+                      <CelulaNotificacoes
+                        usuario={usuario}
+                        expandido={expandidos.has(usuario.uid)}
+                        onAlternar={() => alternarExpandido(usuario.uid)}
+                      />
                     </td>
-                    <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
+                    <td className="border-b px-3 py-2.5 align-top" style={bordaHair}>
                       <span
                         className="t-label rounded-full px-2.5 py-1"
                         style={{
@@ -458,8 +783,15 @@ export function TelaPainelUsuarios() {
                         {usuario.disabled ? 'Bloqueado' : 'Ativo'}
                       </span>
                     </td>
-                    <td className="border-b px-3 py-2.5" style={{ borderColor: 'var(--border-hair)' }}>
+                    <td className="border-b px-3 py-2.5 align-top" style={bordaHair}>
                       <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAlvosTeste([usuario])}
+                          className="t-label text-ink-muted hover:text-ink hover:underline"
+                        >
+                          Enviar teste
+                        </button>
                         <button
                           type="button"
                           onClick={() => setModalSenha(usuario)}
@@ -478,9 +810,10 @@ export function TelaPainelUsuarios() {
                           type="button"
                           disabled={alterandoBloqueio === usuario.uid}
                           onClick={() => void alternarBloqueio(usuario)}
-                          className={`t-label hover:underline disabled:opacity-45 ${
-                            usuario.disabled ? 'text-emerald-600' : 'text-red-600'
-                          }`}
+                          className={
+                            't-label hover:underline disabled:opacity-45 ' +
+                            (usuario.disabled ? 'text-emerald-600' : 'text-red-600')
+                          }
                         >
                           {usuario.disabled ? 'Desbloquear' : 'Bloquear'}
                         </button>
@@ -515,6 +848,18 @@ export function TelaPainelUsuarios() {
             setModalGratuidade(null);
             void recarregar();
           }}
+        />
+      ) : null}
+      {alvosTeste ? (
+        <ModalEnvioTeste
+          alvos={alvosTeste}
+          onFechar={() => setAlvosTeste(null)}
+          /*
+           * Recarrega ao fundo: o envio move `ultimoPushEnviadoEm` e pode ter
+           * podado dispositivos, então a tabela por trás do modal já precisa
+           * refletir isso quando ele fechar.
+           */
+          onEnviado={() => void recarregar()}
         />
       ) : null}
     </div>

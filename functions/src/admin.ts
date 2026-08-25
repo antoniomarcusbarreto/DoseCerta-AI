@@ -465,6 +465,107 @@ export const adminEnviarBroadcast = onCall({ region: REGIAO, cors: true }, async
   return { enviados, totalUsuarios: comToken.length };
 });
 
+/*
+ * Teto de alvos do disparo direcionado. A barreira precisa estar no servidor:
+ * a UI limita a seleção, mas o que impede um "teste" de virar broadcast é esta
+ * validação. Deliberadamente baixo — o propósito é testar num punhado de
+ * aparelhos, não comunicar a base.
+ */
+const MAX_ALVOS_TESTE = 20;
+
+type ResultadoEnvioTeste = {
+  uid: string;
+  email: string | null;
+  enviados: number;
+  erro?: string;
+};
+
+/**
+ * Disparo de push direcionado, para teste em aparelho real sem notificar a base
+ * inteira. Endpoint separado de `adminEnviarBroadcast` de propósito: o caminho
+ * perigoso (todos) e o seguro (alvo restrito) têm validações próprias, e nenhum
+ * erro de parsing de parâmetro pode transformar um no outro.
+ *
+ * Aceita `uids` (seleção no painel) ou `email` (busca no Auth). Usa exatamente
+ * o mesmo `enviarParaUsuario` das rotinas agendadas — um teste que não exercita
+ * o caminho real não prova nada.
+ */
+export const adminEnviarPushTeste = onCall({ region: REGIAO, cors: true }, async (request) => {
+  exigirAdmin(request);
+
+  const { titulo, corpo, uids, email } = request.data as {
+    titulo?: string;
+    corpo?: string;
+    uids?: string[];
+    email?: string;
+  };
+
+  if (!titulo || !corpo) {
+    throw new HttpsError('invalid-argument', 'titulo e corpo são obrigatórios.');
+  }
+
+  const auth = getAuth();
+  const alvos: { uid: string; email: string | null }[] = [];
+
+  if (Array.isArray(uids) && uids.length > 0) {
+    const unicos = [...new Set(uids.filter((uid) => typeof uid === 'string' && uid.length > 0))];
+    if (unicos.length > MAX_ALVOS_TESTE) {
+      throw new HttpsError(
+        'invalid-argument',
+        `Selecione no máximo ${MAX_ALVOS_TESTE} usuários. Para avisar a base inteira use o envio global.`,
+      );
+    }
+    for (const uid of unicos) {
+      if (uid === ADMIN_UID) continue;
+      /*
+       * O e-mail é só para exibir o resultado no painel; se o lookup falhar,
+       * o envio continua — o que importa é o uid.
+       */
+      let emailAlvo: string | null = null;
+      try {
+        emailAlvo = (await auth.getUser(uid)).email ?? null;
+      } catch {
+        emailAlvo = null;
+      }
+      alvos.push({ uid, email: emailAlvo });
+    }
+  } else if (typeof email === 'string' && email.trim()) {
+    try {
+      const usuario = await auth.getUserByEmail(normalizarEmail(email));
+      alvos.push({ uid: usuario.uid, email: usuario.email ?? null });
+    } catch {
+      throw new HttpsError('not-found', 'Nenhuma conta encontrada com esse e-mail.');
+    }
+  }
+
+  if (alvos.length === 0) {
+    throw new HttpsError('invalid-argument', 'Informe ao menos um destinatário (uids ou email).');
+  }
+
+  /*
+   * Sequencial e com try/catch por alvo: a falha de um destinatário não pode
+   * abortar os demais, e `enviados: 0` precisa chegar ao painel como resultado
+   * legítimo — é justamente o sinal de conta sem dispositivo ativo.
+   */
+  const resultados: ResultadoEnvioTeste[] = [];
+  for (const alvo of alvos) {
+    try {
+      const enviados = await enviarParaUsuario(alvo.uid, titulo, corpo);
+      resultados.push({ uid: alvo.uid, email: alvo.email, enviados });
+    } catch (falha) {
+      console.error('[adminEnviarPushTeste] falha ao enviar', alvo.uid, falha);
+      resultados.push({
+        uid: alvo.uid,
+        email: alvo.email,
+        enviados: 0,
+        erro: 'Falha no envio.',
+      });
+    }
+  }
+
+  return { resultados, total: resultados.length };
+});
+
 /**
  * Ferramenta de manutenção: recalcula `notificacoesAtivas` e
  * `totalDispositivosAtivos` em TODOS os usuários a partir da subcoleção
