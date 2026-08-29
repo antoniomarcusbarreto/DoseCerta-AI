@@ -25,9 +25,17 @@ export function ultimaAplicada(aplicacoes: Aplicacao[]): Aplicacao | null {
 /**
  * Data/hora da próxima aplicação prevista.
  *
- * Semanal ancora no `diaSemana` do protocolo em vez de somar 7 dias à última
- * aplicação: somar faria o dia derivar ao longo dos meses toda vez que a
- * pessoa aplicasse algumas horas mais tarde.
+ * Semanal ancora no dia da semana em vez de somar 7 dias à última aplicação:
+ * somar faria o dia derivar ao longo dos meses toda vez que a pessoa
+ * aplicasse algumas horas mais tarde. Mas a âncora usada é a da ÚLTIMA
+ * aplicação real, não o `diaSemana` fixo do cadastro do protocolo — se a
+ * pessoa antecipar ou atrasar um dia (aplicar numa quinta num protocolo
+ * cadastrado pra sexta, por exemplo), o próximo ciclo passa a contar a partir
+ * de quando ela de fato aplicou, e não do dia fixado lá no cadastro. Sem
+ * isso, o app cobraria uma dose nova já no dia seguinte, porque a próxima
+ * ocorrência do dia fixo cairia quase colada na aplicação que acabou de
+ * acontecer. `protocolo.diaSemana` só decide o dia-alvo enquanto não há
+ * nenhuma aplicação registrada ainda.
  */
 export function proximaAplicacao(
   protocolo: Protocolo,
@@ -44,20 +52,21 @@ export function proximaAplicacao(
       : alvo;
   }
 
-  const dia = protocolo.diaSemana ?? (ultima ?? { dataHora: protocolo.iniciadoEm }).dataHora.getDay();
-
-  // Sem histórico: a próxima ocorrência do dia-alvo a partir de hoje.
+  // Sem histórico: a próxima ocorrência do dia-alvo cadastrado a partir de hoje.
   if (!ultima) {
+    const dia = protocolo.diaSemana ?? protocolo.iniciadoEm.getDay();
     const candidato = comHorario(proximoDiaDaSemana(agora, dia), protocolo.horarioMin);
     return candidato.getTime() >= agora.getTime()
       ? candidato
       : comHorario(somarDias(candidato, 7), protocolo.horarioMin);
   }
 
-  // Com histórico: primeira ocorrência do dia-alvo estritamente após a última
-  // aplicação. O `+1` evita devolver o próprio dia em que já se aplicou.
+  // Com histórico: primeira ocorrência do dia da última aplicação estritamente
+  // após ela mesma. O `+1` evita devolver o próprio dia em que já se aplicou;
+  // como a âncora é o dia da própria última aplicação, isso sempre resulta em
+  // exatamente 7 dias depois.
   const aposUltima = somarDias(inicioDoDia(ultima.dataHora), 1);
-  return comHorario(proximoDiaDaSemana(aposUltima, dia), protocolo.horarioMin);
+  return comHorario(proximoDiaDaSemana(aposUltima, ultima.dataHora.getDay()), protocolo.horarioMin);
 }
 
 export type StatusDoDia =

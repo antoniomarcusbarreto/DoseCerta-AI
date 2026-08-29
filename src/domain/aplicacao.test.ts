@@ -80,6 +80,17 @@ describe('proximaAplicacao — semanal', () => {
     expect(diasEntre(hoje, proxima)).toBe(7);
   });
 
+  it('quando a última aplicação foge do diaSemana cadastrado, ancora nela, não no cadastro', () => {
+    // Protocolo cadastrado pra quinta, mas ela aplicou na sexta (antecipou/atrasou um dia).
+    const sexta = new Date(2026, 5, 5, 10, 15);
+    const proxima = proximaAplicacao(protocolo(), [aplicacao(sexta)], new Date(2026, 5, 6, 9, 0));
+
+    // Sem a correção, a próxima quinta cairia no dia seguinte à aplicação (sábado),
+    // marcando atraso um dia depois de ter acabado de aplicar.
+    expect(proxima.getDay()).toBe(5);
+    expect(diasEntre(sexta, proxima)).toBe(7);
+  });
+
   it('ignora doses puladas ao calcular a partir da última aplicada', () => {
     const aplicadaEm = new Date(2026, 5, 4, 8, 0);
     const pulada = aplicacao(new Date(2026, 5, 11, 8, 0), { status: 'pulada' });
