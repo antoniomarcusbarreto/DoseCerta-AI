@@ -199,18 +199,23 @@ export function TelaScanner() {
     try {
       // Sobe a foto ANTES de criar o rascunho — se o upload falhar, ainda não
       // existe nenhum registro no Firestore pra marcar como erro.
-      const { imageUrl, storagePath } = await uploadFotoRefeicao(uid, arquivo);
+      const { imageUrl, storagePath, mimeType } = await uploadFotoRefeicao(uid, arquivo);
 
       await processarAnalise(
         { imageUrl, storagePath, description: null },
         async () => {
           const analisarRefeicaoIA = httpsCallable<
-            { storagePath: string; dietPlanGoals: DietPlanGoals },
+            { storagePath: string; dietPlanGoals: DietPlanGoals; mimeType: string },
             RespostaAnaliseRefeicao
           >(getFunctionsCliente(), 'analisarRefeicaoIA');
           const { data } = await analisarRefeicaoIA({
             storagePath,
             dietPlanGoals: planoAtivo ? { title: planoAtivo.title, meals: planoAtivo.meals } : null,
+            // Formato real do arquivo (a câmera quase sempre dá JPEG, mas a
+            // galeria pode entregar HEIC, PNG etc.) — sem isso a IA recebe um
+            // mimeType errado, não decodifica a imagem e a análise nunca
+            // volta com resultado.
+            mimeType,
           });
           return data;
         },

@@ -509,14 +509,20 @@ export async function excluirFotoProgresso(uid: string, foto: RegistroFoto): Pro
 export async function uploadFotoRefeicao(
   uid: string,
   arquivo: File,
-): Promise<{ imageUrl: string; storagePath: string }> {
+): Promise<{ imageUrl: string; storagePath: string; mimeType: string }> {
   const storagePath = `users/${uid}/meals/${crypto.randomUUID()}.jpg`;
   const referenciaArquivo = refStorage(getStorageCliente(), storagePath);
 
-  await uploadBytes(referenciaArquivo, arquivo);
+  // O nome do arquivo no Storage é sempre `.jpg` por simplicidade (é só uma
+  // chave), mas os BYTES continuam no formato original — uma foto da galeria
+  // pode ser HEIC, PNG, WEBP etc. `arquivo.type` é o que diz à Cloud Function
+  // qual é o formato de verdade, pra ela não tentar decodificar como JPEG algo
+  // que não é.
+  const mimeType = arquivo.type || 'image/jpeg';
+  await uploadBytes(referenciaArquivo, arquivo, { contentType: mimeType });
   const imageUrl = await getDownloadURL(referenciaArquivo);
 
-  return { imageUrl, storagePath };
+  return { imageUrl, storagePath, mimeType };
 }
 
 /**

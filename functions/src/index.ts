@@ -365,9 +365,10 @@ export const analisarRefeicaoIA = onCall(
     }
 
     const uid = request.auth.uid;
-    const { storagePath, dietPlanGoals } = request.data as {
+    const { storagePath, dietPlanGoals, mimeType } = request.data as {
       storagePath?: string;
       dietPlanGoals?: { title: string; meals: { name: string; time: string; description: string }[] } | null;
+      mimeType?: string;
     };
 
     if (!storagePath) {
@@ -376,6 +377,16 @@ export const analisarRefeicaoIA = onCall(
     if (!storagePath.startsWith(`users/${uid}/meals/`)) {
       throw new HttpsError('permission-denied', 'Caminho de imagem inválido.');
     }
+
+    // O tipo real do arquivo importa pro Gemini decodificar a imagem — uma
+    // foto da câmera quase sempre é JPEG, mas uma escolhida da galeria pode
+    // vir em qualquer formato que o dispositivo guarda (HEIC é o padrão dos
+    // iPhones, por exemplo). Mandar um mimeType fixo aqui faz a IA tentar
+    // decodificar bytes de um formato como se fossem outro — ela não decodifica
+    // nada e a análise nunca volta com resultado. Confiamos no mimeType
+    // enviado pelo cliente (é o `File.type` do próprio arquivo escolhido) e só
+    // caímos pro JPEG se ele não vier, por compatibilidade com clientes antigos.
+    const mimeTypeImagem = mimeType && mimeType.startsWith('image/') ? mimeType : 'image/jpeg';
 
     const genAI = new GoogleGenAI({ apiKey: geminiApiKey.value() });
     const promptContexto = dietPlanGoals
@@ -397,7 +408,7 @@ export const analisarRefeicaoIA = onCall(
       const resposta = await comTimeout(
         genAI.models.generateContent({
           model: geminiModel.value(),
-          contents: [{ text: prompt }, { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }],
+          contents: [{ text: prompt }, { inlineData: { mimeType: mimeTypeImagem, data: imageBase64 } }],
           config: {
             responseMimeType: 'application/json',
             responseSchema: esquemaAnaliseRefeicao,
