@@ -93,6 +93,7 @@ function comTimeout<T>(promessa: Promise<T>, ms: number, mensagem: string): Prom
 export function TelaScanner() {
   const navegar = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
+  const inputGaleriaRef = useRef<HTMLInputElement>(null);
   const { uid } = useDados();
   const { askConfirm } = useConfirm();
 
@@ -124,9 +125,15 @@ export function TelaScanner() {
     }
   }, [pendingMealId]);
 
-  // Rascunho aponta para um doc que não existe mais (excluído/nunca criado): limpa e volta ao início.
+  // Rascunho aponta para um doc que não existe mais (excluído/nunca criado), ou
+  // que já foi confirmado (`completed`) — ex.: a pessoa confirmou a refeição e
+  // fechou o app antes do `setPendingMealId(null)` rodar. Sem isso o ponteiro
+  // fica preso no localStorage pra sempre: como nenhum dos cartões (analisando/
+  // erro/pendente) reconhece `completed`, a tela de escanear some e só sobra o
+  // histórico, com "pendingMeal" travado num registro que já foi salvo.
   useEffect(() => {
-    if (pendingMealId && !pendingMealDoc.carregando && !pendingMealDoc.dados) {
+    if (!pendingMealId || pendingMealDoc.carregando) return;
+    if (!pendingMealDoc.dados || pendingMealDoc.dados.status === 'completed') {
       setPendingMealId(null);
     }
   }, [pendingMealId, pendingMealDoc.carregando, pendingMealDoc.dados]);
@@ -373,6 +380,26 @@ export function TelaScanner() {
             />
             <Button type="button" larguraTotal onClick={() => inputRef.current?.click()} disabled={!uid}>
               📸 Escanear Prato
+            </Button>
+
+            {/* Sem `capture`: abre o seletor normal do sistema, que inclui a
+                galeria — pra quando não dá pra fotografar o prato na hora
+                (celular sem câmera disponível no momento, foto tirada antes). */}
+            <input
+              ref={inputGaleriaRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={handleFileUpload}
+            />
+            <Button
+              type="button"
+              variante="fantasma"
+              larguraTotal
+              disabled={!uid}
+              onClick={() => inputGaleriaRef.current?.click()}
+            >
+              🖼️ Carregar Foto da Galeria
             </Button>
 
             {!mostrarCampoTexto ? (
