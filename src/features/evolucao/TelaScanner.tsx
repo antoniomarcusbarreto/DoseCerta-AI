@@ -138,6 +138,38 @@ export function TelaScanner() {
     }
   }, [pendingMealId, pendingMealDoc.carregando, pendingMealDoc.dados]);
 
+  // Rascunho órfão em `analyzing`: quem grava o resultado (ou o erro) é a
+  // própria aba que iniciou a análise, no fim de `processarAnalise`. Se o app
+  // foi fechado/recarregado no meio do caminho (comum no celular: o sistema
+  // mata o PWA ao abrir a câmera ou trocar de app), ninguém mais vai atualizar
+  // o doc — e como o cartão "Analisando" não tem saída e esconde o de
+  // escanear, a tela fica travada pra sempre. Quando esta aba não está
+  // analisando e o rascunho já passou do timeout máximo (com folga, pra não
+  // atropelar outra aba que ainda esteja de fato esperando a IA), marcamos
+  // erro: a tela cai no cartão "Falha na análise", com o botão de descartar.
+  const marcandoOrfaoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!uid || !pendingMeal || pendingMeal.status !== 'analyzing' || isAnalyzing) return;
+    const mealId = pendingMeal.id;
+    const idadeMs = Date.now() - pendingMeal.createdAt.getTime();
+    const restanteMs = Math.max(0, TIMEOUT_ANALISE_FOTO_MS + 10_000 - idadeMs);
+    const timer = setTimeout(() => {
+      if (marcandoOrfaoRef.current === mealId) return;
+      marcandoOrfaoRef.current = mealId;
+      marcarErroAnaliseRefeicao(
+        uid,
+        mealId,
+        'A análise foi interrompida (o app foi fechado ou recarregado). Tente novamente.',
+      ).catch((falha) => {
+        console.error('[TelaScanner] falha ao marcar rascunho órfão como erro', falha);
+        marcandoOrfaoRef.current = null;
+        // Último recurso: solta o ponteiro local pra tela não continuar presa.
+        setPendingMealId(null);
+      });
+    }, restanteMs);
+    return () => clearTimeout(timer);
+  }, [uid, pendingMeal, isAnalyzing]);
+
   useEffect(() => {
     if (pendingMeal) setItensEmEdicao(pendingMeal.items);
   }, [pendingMeal]);
